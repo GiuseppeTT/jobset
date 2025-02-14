@@ -1,0 +1,41 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: simple-test
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: worker
+        image: busybox
+        restartPolicy: Always
+        command: ['/bin/sh', '-c']
+        args:
+        - |
+          echo "$(date '+%Y/%m/%d %H:%M:%S') Start"
+          for i in $(seq 1 10); do
+            echo "$(date '+%Y/%m/%d %H:%M:%S') I'm alive"
+            sleep 1
+          done
+          echo "$(date '+%Y/%m/%d %H:%M:%S') End"
+      containers:
+      - name: agent
+        image: <CHANGE ME>
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: cri-socket
+          mountPath: /run/containerd/containerd.sock
+        env:
+          - name: POD_UID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.uid
+          - name: TARGET_CONTAINER_NAME
+            value: worker
+      volumes:
+      - name: cri-socket
+        hostPath:
+          path: /run/containerd/containerd.sock
+          type: Socket
