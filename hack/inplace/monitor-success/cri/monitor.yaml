@@ -1,0 +1,59 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fail-fail-success-stop
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+      - name: worker
+        image: busybox
+        restartPolicy: Always
+        command: ['/bin/sh', '-c']
+        args:
+        - |
+          echo "$(date '+%Y/%m/%d %H:%M:%S') Start"
+
+          RESTART_COUNT=$(/bin/cat /tmp/restart_count || echo 0)
+          NEW_RESTART_COUNT=$((RESTART_COUNT + 1))
+          echo "$NEW_RESTART_COUNT" > /tmp/restart_count
+          echo "$(date '+%Y/%m/%d %H:%M:%S') Restart count: ${NEW_RESTART_COUNT}"
+
+          for i in $(seq 1 10); do
+            echo "$(date '+%Y/%m/%d %H:%M:%S') I'm alive"
+            sleep 1
+          done
+
+          if [ "$NEW_RESTART_COUNT" -le 2 ]; then
+            echo "$(date '+%Y/%m/%d %H:%M:%S') Fail"
+            exit 1
+          else
+            echo "$(date '+%Y/%m/%d %H:%M:%S') Finish successfully"
+            exit 0
+          fi
+        volumeMounts:
+        - name: restart-volume
+          mountPath: /tmp
+      containers:
+      - name: agent
+        image: <CHANGE ME>
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: cri-socket
+          mountPath: /run/containerd/containerd.sock
+        env:
+          - name: POD_UID
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.uid
+          - name: TARGET_CONTAINER_NAME
+            value: worker
+      volumes:
+      - name: cri-socket
+        hostPath:
+          path: /run/containerd/containerd.sock
+          type: Socket
+      - name: restart-volume
+        emptyDir: {}
