@@ -290,7 +290,6 @@ func (a *Agent) releaseLock(ctx context.Context) {
 		klog.Errorf("Failed to release lock: %v", err)
 		return
 	}
-
 	klog.Infof("Released lock")
 }
 
