@@ -1,0 +1,127 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+spec:
+  selector:
+    matchLabels:
+      app: redis
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7.4.2-alpine
+        ports:
+        - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+spec:
+  type: ClusterIP
+  selector:
+    app: redis
+  ports:
+  - protocol: TCP
+    port: 6379
+    targetPort: 6379
+---
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+ name: fail-fail-success-jobset
+spec:
+  failurePolicy:
+    maxRestarts: 3
+  replicatedJobs:
+  - name: workers
+    replicas: 1
+    template:
+      spec:
+        completions: 2
+        parallelism: 2
+        template:
+          spec:
+            restartPolicy: Never
+            initContainers:
+            - name: wait-for-redis
+              image: busybox:1.37.0
+              command: ['sh', '-c']
+              args:
+              - |
+                echo "$(date '+%Y/%m/%d %H:%M:%S') Start"
+
+                until nc -z redis 6379; do
+                  echo "$(date '+%Y/%m/%d %H:%M:%S') Waiting for Redis"
+                  sleep 1
+                done
+                echo "$(date '+%Y/%m/%d %H:%M:%S') Redis is up"
+
+                echo "$(date '+%Y/%m/%d %H:%M:%S') End"
+            - name: worker
+              image: busybox
+              restartPolicy: Always
+              command: ['/bin/sh', '-c']
+              args:
+              - |
+                echo "$(date '+%Y/%m/%d %H:%M:%S') Start"
+
+                RESTART_COUNT=$(/bin/cat /tmp/restart_count || echo 0)
+                echo "$(date '+%Y/%m/%d %H:%M:%S') Restart count: ${RESTART_COUNT}"
+                NEW_RESTART_COUNT=$((RESTART_COUNT + 1))
+                echo "$NEW_RESTART_COUNT" > /tmp/restart_count
+
+                min=10
+                max=60
+                iteration_count=$(( (RANDOM % (max - min + 1)) + min ))
+                echo "$(date '+%Y/%m/%d %H:%M:%S') Run for ${iteration_count} seconds"
+
+                for i in $(seq 1 $iteration_count); do
+                  echo "$(date '+%Y/%m/%d %H:%M:%S') I'm alive"
+                  sleep 1
+                done
+
+                if [ "$NEW_RESTART_COUNT" -le 2 ]; then
+                  echo "$(date '+%Y/%m/%d %H:%M:%S') Fail"
+                  exit 1
+                else
+                  echo "$(date '+%Y/%m/%d %H:%M:%S') Finish successfully"
+                  exit 0
+                fi
+              volumeMounts:
+              - name: restart-volume
+                mountPath: /tmp
+            containers:
+            - name: agent
+              image: <CHANGE ME>
+              command: ['/app/main']
+              args:
+              - "--target-pod-uid=$(POD_UID)"
+              - "--target-container-name=worker"
+              - "--cri-socket-path=unix:///run/containerd/containerd.sock"
+              - "--cri-polling-interval=1s"
+              - "--redis-address=redis:6379"
+              - "--redis-lock-ttl=10s"
+              - "--redis-lock-interval=2s"
+              securityContext:
+                privileged: true
+              env:
+                - name: POD_UID
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.uid
+              volumeMounts:
+              - name: cri-socket
+                mountPath: /run/containerd/containerd.sock
+            volumes:
+            - name: cri-socket
+              hostPath:
+                path: /run/containerd/containerd.sock
+                type: Socket
+            - name: restart-volume
+              emptyDir: {}
