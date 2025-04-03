@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	JobSetUidKey          string = "jobset.sigs.k8s.io/jobset-uid"
 	JobSetNameKey         string = "jobset.sigs.k8s.io/jobset-name"
 	ReplicatedJobReplicas string = "jobset.sigs.k8s.io/replicatedjob-replicas"
 	// GlobalReplicasKey is a label/annotation set to the total number of replicatedJob replicas.

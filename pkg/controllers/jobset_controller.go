@@ -768,6 +768,7 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	// Set labels on the object.
 	labels := make(map[string]string)
 	maps.Copy(labels, obj.GetLabels())
+	labels[jobset.JobSetUidKey] = string(js.UID)
 	labels[jobset.JobSetNameKey] = js.Name
 	labels[jobset.ReplicatedJobNameKey] = rjob.Name
 	labels[constants.RestartsKey] = strconv.Itoa(int(js.Status.Restarts))
@@ -782,6 +783,7 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 
 	annotations := make(map[string]string)
 	maps.Copy(annotations, obj.GetAnnotations())
+	annotations[jobset.JobSetUidKey] = string(js.UID)
 	annotations[jobset.JobSetNameKey] = js.Name
 	annotations[jobset.ReplicatedJobNameKey] = rjob.Name
 	annotations[constants.RestartsKey] = strconv.Itoa(int(js.Status.Restarts))
