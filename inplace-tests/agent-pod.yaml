@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: agent-pod
+spec:
+  restartPolicy: OnFailure
+  volumes:
+  - name: cri-socket
+    hostPath:
+      path: /run/containerd/containerd.sock
+      type: Socket
+  - name: startup-volume
+    emptyDir: {}
+  initContainers:
+  - name: agent
+    restartPolicy: Always
+    securityContext:
+      privileged: true
+    image: <CHANGE ME>
+    args:
+    - "--worker-jobset-uid=js1"
+    - "--worker-id=w1"
+    - "--worker-pod-uid=$(POD_UID)"
+    - "--worker-container-name=worker"
+    - "--worker-termination-grace-period=0"
+    - "--cri-socket-path=unix:///run/containerd/containerd.sock"
+    - "--cri-polling-interval=1s"
+    - "--redis-address=redis.default.svc.cluster.local:6379"
+    - "--redis-broadcast-channel-name=broadcast-channel"
+    - "-v=2"
+    env:
+    - name: POD_UID
+      valueFrom:
+        fieldRef:
+          fieldPath: metadata.uid
+    volumeMounts:
+    - name: cri-socket
+      mountPath: /run/containerd/containerd.sock
+    - name: startup-volume
+      mountPath: /app/startup
+    ports:
+    - containerPort: 80
+    startupProbe:
+      httpGet:
+        path: /ready
+        port: 80
+      initialDelaySeconds: 0
+      periodSeconds: 1       
+      successThreshold: 1    
+      failureThreshold: 60 
+  containers:
+  - name: worker
+    image: busybox
+    command: ['/bin/sh', '-c']
+    args:
+    - |
+      echo "$(date '+%Y/%m/%d %H:%M:%S') Start"
+
+      while true; do
+        if [ -f /tmp/fail ]; then
+          echo "$(date '+%Y/%m/%d %H:%M:%S') Exiting 1"
+          exit 1;
+        fi;
+        if [ -f /tmp/succeed ]; then
+          echo "$(date '+%Y/%m/%d %H:%M:%S') Exiting 0"
+          exit 0;
+        fi;
+        sleep 1;
+      done
+
+      echo "$(date '+%Y/%m/%d %H:%M:%S') End"

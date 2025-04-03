@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/redis/go-redis/v9"
 	"k8s.io/utils/clock"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -41,6 +42,7 @@ import (
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 	"sigs.k8s.io/jobset/pkg/constants"
@@ -54,9 +56,10 @@ var apiGVStr = jobset.GroupVersion.String()
 // JobSetReconciler reconciles a JobSet object
 type JobSetReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Record record.EventRecorder
-	clock  clock.Clock
+	Scheme      *runtime.Scheme
+	Record      record.EventRecorder
+	clock       clock.Clock
+	redisClient *redis.Client
 }
 
 type childJobs struct {
@@ -90,8 +93,8 @@ type eventParams struct {
 	eventMessage string
 }
 
-func NewJobSetReconciler(client client.Client, scheme *runtime.Scheme, record record.EventRecorder) *JobSetReconciler {
-	return &JobSetReconciler{Client: client, Scheme: scheme, Record: record, clock: clock.RealClock{}}
+func NewJobSetReconciler(client client.Client, scheme *runtime.Scheme, record record.EventRecorder, redisClient *redis.Client) *JobSetReconciler {
+	return &JobSetReconciler{Client: client, Scheme: scheme, Record: record, clock: clock.RealClock{}, redisClient: redisClient}
 }
 
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update;patch
@@ -112,9 +115,32 @@ func (r *JobSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	log := ctrl.LoggerFrom(ctx).WithValues("jobset", klog.KObj(&js))
+
+	// Only done for in place pod restart
+	// Only done for objects marked for deletion
+	// Remove workload data from Redis if it is still in there
+	if jobSetMarkedForDeletion(&js) && inPlacePodRestart(&js) && redisSetupCompleted(&js) {
+		if err := r.removeWorkloadDataFromRedis(ctx, &js); err != nil {
+			log.Error(err, "removing workload data from Redis")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	// Don't reconcile JobSets marked for deletion.
 	if jobSetMarkedForDeletion(&js) {
 		return ctrl.Result{}, nil
+	}
+
+	// Only done for in place pod restart
+	// Add workload data to Redis if it is not already in there
+	if inPlacePodRestart(&js) && !redisSetupCompleted(&js) {
+		if err := r.addWorkloadDataToRedis(ctx, &js); err != nil {
+			log.Error(err, "adding workload data to Redis")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	// Track JobSet status updates that should be performed at the end of the reconciliation attempt.
@@ -224,6 +250,69 @@ func (r *JobSetReconciler) reconcile(ctx context.Context, js *jobset.JobSet, upd
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// TODO: Extract constants
+func (r *JobSetReconciler) addWorkloadDataToRedis(ctx context.Context, js *jobset.JobSet) error {
+	log := ctrl.LoggerFrom(ctx).WithValues("jobset", klog.KObj(js))
+	workerCount := 0
+	for _, rjob := range js.Spec.ReplicatedJobs {
+		workerCount += int(rjob.Replicas) * int(*rjob.Template.Spec.Parallelism)
+	}
+	now, err := r.redisClient.Time(ctx).Result()
+	if err != nil {
+		return fmt.Errorf("failed to get current time from Redis: %w", err)
+	}
+	_, err = r.redisClient.TxPipelined(ctx, func(transaction redis.Pipeliner) error {
+		transaction.Set(ctx, fmt.Sprintf("jobset-uid:%s:worker-count", js.UID), workerCount, 0)
+		transaction.Set(ctx, fmt.Sprintf("jobset-uid:%s:timeout-duration", js.UID), js.Spec.FailurePolicy.RestartTimeoutSeconds, 0)
+		transaction.HSet(ctx, fmt.Sprintf("jobset-uid:%s:state", js.UID), "name", "creating")
+		transaction.HSet(ctx, fmt.Sprintf("jobset-uid:%s:state", js.UID), "start-time", now)
+		transaction.HSet(ctx, fmt.Sprintf("jobset-uid:%s:state", js.UID), "desired-total-restart-count", 0)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to set workload data to Redis: %w", err)
+	}
+	if js.Annotations == nil {
+		js.Annotations = make(map[string]string)
+	}
+	js.Annotations[jobset.RedisSetupCompletedKey] = "true"
+	controllerutil.AddFinalizer(js, "jobset.sigs.k8s.io/finalizer")
+	r.Record.Eventf(js, corev1.EventTypeNormal, "RedisSetupSuccess", "Successfully added workload data to Redis")
+	if err := r.Update(ctx, js); err != nil {
+		if !apierrors.IsConflict(err) {
+			log.Error(err, "updating jobset")
+		}
+		return err
+	}
+	return nil
+}
+
+// TODO: Extract constants
+func (r *JobSetReconciler) removeWorkloadDataFromRedis(ctx context.Context, js *jobset.JobSet) error {
+	log := ctrl.LoggerFrom(ctx).WithValues("jobset", klog.KObj(js))
+	_, err := r.redisClient.TxPipelined(ctx, func(transaction redis.Pipeliner) error {
+		transaction.Del(ctx, fmt.Sprintf("jobset-uid:%s:worker-count", js.UID))
+		transaction.Del(ctx, fmt.Sprintf("jobset-uid:%s:timeout-duration", js.UID))
+		transaction.Del(ctx, fmt.Sprintf("jobset-uid:%s:state", js.UID))
+		transaction.Del(ctx, fmt.Sprintf("jobset-uid:%s:restart-count-by-worker-id", js.UID))
+		transaction.Del(ctx, fmt.Sprintf("jobset-uid:%s:total-restart-count-by-worker-id", js.UID))
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to remove workload data from Redis: %w", err)
+	}
+	delete(js.Annotations, jobset.RedisSetupCompletedKey)
+	controllerutil.RemoveFinalizer(js, "jobset.sigs.k8s.io/finalizer")
+	r.Record.Eventf(js, corev1.EventTypeNormal, "RedisRemoveSuccess", "Successfully removed workload data from Redis")
+	if err := r.Update(ctx, js); err != nil {
+		if !apierrors.IsConflict(err) {
+			log.Error(err, "updating jobset")
+		}
+		return err
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -768,6 +857,7 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	// Set labels on the object.
 	labels := make(map[string]string)
 	maps.Copy(labels, obj.GetLabels())
+	labels[jobset.JobSetUidKey] = string(js.UID)
 	labels[jobset.JobSetNameKey] = js.Name
 	labels[jobset.ReplicatedJobNameKey] = rjob.Name
 	labels[constants.RestartsKey] = strconv.Itoa(int(js.Status.Restarts))
@@ -782,6 +872,7 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 
 	annotations := make(map[string]string)
 	maps.Copy(annotations, obj.GetAnnotations())
+	annotations[jobset.JobSetUidKey] = string(js.UID)
 	annotations[jobset.JobSetNameKey] = js.Name
 	annotations[jobset.ReplicatedJobNameKey] = rjob.Name
 	annotations[constants.RestartsKey] = strconv.Itoa(int(js.Status.Restarts))
@@ -876,6 +967,15 @@ func jobSetFinished(js *jobset.JobSet) bool {
 		}
 	}
 	return false
+}
+
+func inPlacePodRestart(js *jobset.JobSet) bool {
+	return js.Spec.FailurePolicy != nil && js.Spec.FailurePolicy.RestartStrategy == jobset.RestartInPlace
+}
+
+func redisSetupCompleted(js *jobset.JobSet) bool {
+	_, redisSetupCompleted := js.Annotations[jobset.RedisSetupCompletedKey]
+	return redisSetupCompleted
 }
 
 func jobSetMarkedForDeletion(js *jobset.JobSet) bool {

@@ -17,11 +17,15 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
 	"net/http"
 	"os"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -43,6 +47,7 @@ import (
 	"sigs.k8s.io/jobset/pkg/config"
 	"sigs.k8s.io/jobset/pkg/controllers"
 	"sigs.k8s.io/jobset/pkg/metrics"
+	"sigs.k8s.io/jobset/pkg/runnables/inplace"
 	"sigs.k8s.io/jobset/pkg/util/cert"
 	"sigs.k8s.io/jobset/pkg/util/useragent"
 	"sigs.k8s.io/jobset/pkg/version"
@@ -194,10 +199,38 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup Redis client
+	// TODO: Get Redis address from arguments instead of hardcoding
+	redisClient := redis.NewClient(&redis.Options{
+		Addr: "redis.default.svc.cluster.local:6379",
+		DB:   0,
+	})
+	_, err = redisClient.Ping(context.Background()).Result()
+	if err != nil {
+		setupLog.Error(err, "unable to setup Redis client")
+		os.Exit(1)
+	}
+
+	// Setup in place pod restart orchestrator
+	// TODO: Get options from arguments instead of hardcoding
+	orchestratorOptions := inplace.OrchestratorOptions{
+		PollingInterval:      1 * time.Second,
+		BroadcastChannelName: "broadcast-channel",
+	}
+	orchestrator, err := inplace.NewOrchestrator(mgr.GetClient(), redisClient, orchestratorOptions)
+	if err != nil {
+		setupLog.Error(err, "unable to create in place pod restart orchestrator")
+		os.Exit(1)
+	}
+	if err := mgr.Add(orchestrator); err != nil {
+		setupLog.Error(err, "unable to add in place pod restart orchestrator as runnable to manager")
+		os.Exit(1)
+	}
+
 	// Cert won't be ready until manager starts, so start a goroutine here which
 	// will block until the cert is ready before setting up the controllers.
 	// Controllers who register after manager starts will start directly.
-	go setupControllers(mgr, certsReady)
+	go setupControllers(mgr, redisClient, certsReady)
 
 	setupHealthzAndReadyzCheck(mgr, certsReady)
 
@@ -208,7 +241,7 @@ func main() {
 	}
 }
 
-func setupControllers(mgr ctrl.Manager, certsReady chan struct{}) {
+func setupControllers(mgr ctrl.Manager, redisClient *redis.Client, certsReady chan struct{}) {
 	// The controllers won't work until the webhooks are operating,
 	// and the webhook won't work until the certs are all in places.
 	setupLog.Info("waiting for the cert generation to complete")
@@ -216,7 +249,7 @@ func setupControllers(mgr ctrl.Manager, certsReady chan struct{}) {
 	setupLog.Info("certs ready")
 
 	// Set up JobSet controller.
-	jobSetController := controllers.NewJobSetReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("jobset"))
+	jobSetController := controllers.NewJobSetReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("jobset"), redisClient)
 	if err := jobSetController.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JobSet")
 		os.Exit(1)

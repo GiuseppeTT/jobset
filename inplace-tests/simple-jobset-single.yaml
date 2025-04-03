@@ -1,0 +1,28 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: simple-jobset-single
+spec:
+  failurePolicy:
+    restartStrategy: RestartInPlace
+    restartTimeoutSeconds: 60
+  replicatedJobs:
+  - name: workers
+    replicas: 1
+    template:
+      spec:
+        completions: 1
+        parallelism: 1
+        template:
+          spec:
+            containers:
+            - name: worker
+              image: busybox
+              command: ['/bin/sh', '-c']
+              args:
+              - |
+                echo "$(date '+%Y/%m/%d %H:%M:%S') Start"
+
+                sleep infinity
+
+                echo "$(date '+%Y/%m/%d %H:%M:%S') End"

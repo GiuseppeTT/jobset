@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	JobSetUidKey          string = "jobset.sigs.k8s.io/jobset-uid"
 	JobSetNameKey         string = "jobset.sigs.k8s.io/jobset-name"
 	ReplicatedJobReplicas string = "jobset.sigs.k8s.io/replicatedjob-replicas"
 	// GlobalReplicasKey is a label/annotation set to the total number of replicatedJob replicas.
@@ -73,6 +74,11 @@ const (
 	// If a ReplicatedJob is part of a group, then its child jobs and pods have this
 	// label/annotation ranging from 0 to annotations[GroupReplicasKey] - 1
 	JobGroupIndexKey string = "jobset.sigs.k8s.io/job-group-index"
+
+	// Only used in in place pod restart
+	// RedisSetupCompletedKey is a label/annotation set to JobSet. It is set when
+	// the JobSet data has been added to Redis.
+	RedisSetupCompletedKey string = "jobset.sigs.k8s.io/redis-setup-completed"
 )
 
 type JobSetConditionType string
@@ -371,6 +377,11 @@ type FailurePolicy struct {
 	// +kubebuilder:default=Recreate
 	RestartStrategy JobSetRestartStrategy `json:"restartStrategy,omitempty"`
 
+	// Only used in in place restart
+	// Time to wait for all workers to restart before declaring the
+	// in place restart attempt as failed and failing over to recreating all pods
+	RestartTimeoutSeconds int32 `json:"restartTimeoutSeconds,omitempty"`
+
 	// List of failure policy rules for this JobSet.
 	// For a given Job failure, the rules will be evaluated in order,
 	// and only the first matching rule will be executed.
@@ -378,7 +389,7 @@ type FailurePolicy struct {
 	Rules []FailurePolicyRule `json:"rules,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=Recreate;BlockingRecreate
+// +kubebuilder:validation:Enum=Recreate;BlockingRecreate;RestartInPlace
 type JobSetRestartStrategy string
 
 const (
@@ -388,6 +399,9 @@ const (
 	// BlockingRecreate ensures that all Jobs (and Pods) from a previous iteration are deleted before
 	// creating new Jobs.
 	BlockingRecreate JobSetRestartStrategy = "BlockingRecreate"
+
+	// Restart worker pods in place. If not possible, fail over to recreating all pods
+	RestartInPlace JobSetRestartStrategy = "RestartInPlace"
 )
 
 type SuccessPolicy struct {
