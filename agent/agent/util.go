@@ -6,20 +6,20 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/klog/v2"
 )
 
 const (
-	criPodUidLabelKey               = "io.kubernetes.pod.uid"
-	criContainerNameLabelKey        = "io.kubernetes.container.name"
-	criRestartCountAnnotationKey    = "io.kubernetes.container.restartCount"
-	redisRestartCountKeySuffix      = "restart-count-by-worker-id"
-	redisTotalRestartCountKeySuffix = "total-restart-count-by-worker-id"
-	startedFilePath                 = "/app/startup/agent-started-once-before"
-	readyProbeHttpPath              = "/ready"
-	readyProbePort                  = 80
+	criPodUidLabelKey                = "io.kubernetes.pod.uid"
+	criContainerNameLabelKey         = "io.kubernetes.container.name"
+	criRestartCountAnnotationKey     = "io.kubernetes.container.restartCount"
+	valkeyRestartCountKeySuffix      = "restart-count-by-worker-id"
+	valkeyTotalRestartCountKeySuffix = "total-restart-count-by-worker-id"
+	startedFilePath                  = "/app/startup/agent-started-once-before"
+	readyProbeHttpPath               = "/ready"
+	readyProbePort                   = 80
 )
 
 type MessageData struct {
@@ -30,8 +30,21 @@ func intPtr(i int) *int {
 	return &i
 }
 
-func (a *Agent) getCountVariablesFromRedis(ctx context.Context) (*int, *int, error) {
-	rawRestartCount, rawTotalRestartCount, err := a.getRawCountVariablesFromRedis(ctx)
+func (a *Agent) getBroadcastChannel(ctx context.Context) chan valkey.PubSubMessage {
+	broadcastChannel := make(chan valkey.PubSubMessage)
+	go func() {
+		err := a.valkeyClient.Receive(ctx, a.valkeyClient.B().Subscribe().Channel(a.valkeyBroadcastChannelName).Build(), func(msg valkey.PubSubMessage) {
+			broadcastChannel <- msg
+		})
+		if err != nil {
+			klog.Errorf("Failed to receive broadcast message: %v", err)
+		}
+	}()
+	return broadcastChannel
+}
+
+func (a *Agent) getCountVariablesFromValkey(ctx context.Context) (*int, *int, error) {
+	rawRestartCount, rawTotalRestartCount, err := a.getRawCountVariablesFromValkey(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -42,22 +55,33 @@ func (a *Agent) getCountVariablesFromRedis(ctx context.Context) (*int, *int, err
 	return restartCount, totalRestartCount, nil
 }
 
-func (a *Agent) getRawCountVariablesFromRedis(ctx context.Context) (*string, *string, error) {
-	var responseRestartCount *redis.StringCmd
-	var responseTotalRestartCount *redis.StringCmd
-	_, err := a.redisClient.TxPipelined(ctx, func(transaction redis.Pipeliner) error {
-		responseRestartCount = transaction.HGet(ctx, a.buildRedisRestartCountKeyName(), a.workerId)
-		responseTotalRestartCount = transaction.HGet(ctx, a.buildRedisTotalRestartCountKeyName(), a.workerId)
-		return nil
-	})
-	if err == redis.Nil {
+func (a *Agent) getRawCountVariablesFromValkey(ctx context.Context) (*string, *string, error) {
+	script := valkey.NewLuaScript(`
+	local value1 = server.call('HGET', KEYS[1], ARGV[1])
+	local value2 = server.call('HGET', KEYS[2], ARGV[2])
+
+	return { value1, value2 }
+	`)
+	keys := []string{a.buildValkeyRestartCountKeyName(), a.buildValkeyTotalRestartCountKeyName()}
+	args := []string{a.workerId, a.workerId}
+	list, err := script.Exec(ctx, a.valkeyClient, keys, args).ToArray()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get restart count and total restart count from Valkey: %w", err)
+	}
+	restartCount, err := list[0].ToString()
+	if valkey.IsValkeyNil(err) {
 		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get restart count and total restart count in transaction from Redis: %w", err)
+		return nil, nil, fmt.Errorf("failed to extract value from restart count: %w", err)
 	}
-	restartCount := responseRestartCount.Val()
-	totalRestartCount := responseTotalRestartCount.Val()
+	totalRestartCount, err := list[1].ToString()
+	if valkey.IsValkeyNil(err) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to extract value from total restart count: %w", err)
+	}
 	return &restartCount, &totalRestartCount, nil
 }
 
@@ -76,64 +100,62 @@ func (a *Agent) parseCountVariables(rawRestartCount *string, rawTotalRestartCoun
 	return &restartCount, &totalRestartCount, nil
 }
 
-func (a *Agent) initializeCountVariablesToRedis(ctx context.Context, restartCount *int, totalRestartCount *int) error {
+func (a *Agent) initializeCountVariablesToValkey(ctx context.Context, restartCount *int, totalRestartCount *int) error {
 	if restartCount == nil || totalRestartCount == nil {
 		return fmt.Errorf("restart count and total restart count cannot be nil")
 	}
-	keys := []string{a.buildRedisRestartCountKeyName(), a.buildRedisTotalRestartCountKeyName()}
-	args := []any{a.workerId, a.workerId, *restartCount, *totalRestartCount}
-	_, err := hsetOnlyIfMissingScript.Run(ctx, a.redisClient, keys, args).Result()
+	script := valkey.NewLuaScript(`
+	local exists1 = server.call('HEXISTS', KEYS[1], ARGV[1])
+	local exists2 = server.call('HEXISTS', KEYS[2], ARGV[2])
+
+	if exists1 == 0 and exists2 == 0 then
+		server.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+		server.call('HSET', KEYS[2], ARGV[2], ARGV[4])
+		return server.status_reply("OK")
+	else
+		return server.error_reply("COND_NOT_MET: Field " .. ARGV[1] .. " in " .. KEYS[1] .. " or field " .. ARGV[2] .. " in " .. KEYS[2] .. " already exists")
+	end
+	`)
+	keys := []string{a.buildValkeyRestartCountKeyName(), a.buildValkeyTotalRestartCountKeyName()}
+	args := []string{a.workerId, a.workerId, strconv.Itoa(*restartCount), strconv.Itoa(*totalRestartCount)}
+	err := script.Exec(ctx, a.valkeyClient, keys, args).Error()
 	if err != nil {
-		return fmt.Errorf("failed to initialize restart count and total restart count in transaction to Redis: %w", err)
+		return fmt.Errorf("failed to initialize restart count and total restart count to Valkey: %w", err)
 	}
 	return nil
 }
 
-var hsetOnlyIfMissingScript = redis.NewScript(`
-local exists1 = redis.call('HEXISTS', KEYS[1], ARGV[1])
-local exists2 = redis.call('HEXISTS', KEYS[2], ARGV[2])
-
-if exists1 == 0 and exists2 == 0 then
-	redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
-	redis.call('HSET', KEYS[2], ARGV[2], ARGV[4])
-	return redis.status_reply("OK")
-else
-	return redis.error_reply("COND_NOT_MET: Field " .. ARGV[1] .. " in " .. KEYS[1] .. " or field " .. ARGV[2] .. " in " .. KEYS[2] .. " already exists")
-end
-`)
-
-func (a *Agent) updateCountVariablesToRedis(ctx context.Context, restartCount *int, totalRestartCount *int) error {
+func (a *Agent) updateCountVariablesToValkey(ctx context.Context, restartCount *int, totalRestartCount *int) error {
 	if restartCount == nil || totalRestartCount == nil {
 		return fmt.Errorf("restart count and total restart count cannot be nil")
 	}
-	keys := []string{a.buildRedisRestartCountKeyName(), a.buildRedisTotalRestartCountKeyName()}
-	args := []any{a.workerId, a.workerId, *restartCount, *totalRestartCount}
-	_, err := hsetOnlyIfExistScript.Run(ctx, a.redisClient, keys, args).Result()
+	script := valkey.NewLuaScript(`
+	local exists1 = server.call('HEXISTS', KEYS[1], ARGV[1])
+	local exists2 = server.call('HEXISTS', KEYS[2], ARGV[2])
+
+	if exists1 == 1 and exists2 == 1 then
+		server.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+		server.call('HSET', KEYS[2], ARGV[2], ARGV[4])
+		return server.status_reply("OK")
+	else
+		return server.error_reply("COND_NOT_MET: Field " .. ARGV[1] .. " in " .. KEYS[1] .. " or field " .. ARGV[2] .. " in " .. KEYS[2] .. " does not exist")
+	end
+	`)
+	keys := []string{a.buildValkeyRestartCountKeyName(), a.buildValkeyTotalRestartCountKeyName()}
+	args := []string{a.workerId, a.workerId, strconv.Itoa(*restartCount), strconv.Itoa(*totalRestartCount)}
+	err := script.Exec(ctx, a.valkeyClient, keys, args).Error()
 	if err != nil {
-		return fmt.Errorf("failed to update restart count and total restart count in transaction to Redis: %w", err)
+		return fmt.Errorf("failed to update restart count and total restart count to Valkey: %w", err)
 	}
 	return nil
 }
 
-var hsetOnlyIfExistScript = redis.NewScript(`
-local exists1 = redis.call('HEXISTS', KEYS[1], ARGV[1])
-local exists2 = redis.call('HEXISTS', KEYS[2], ARGV[2])
-
-if exists1 == 1 and exists2 == 1 then
-	redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
-	redis.call('HSET', KEYS[2], ARGV[2], ARGV[4])
-  return redis.status_reply("OK")
-else
-  	return redis.error_reply("COND_NOT_MET: Field " .. ARGV[1] .. " in " .. KEYS[1] .. " or field " .. ARGV[2] .. " in " .. KEYS[2] .. " does not exist")
-end
-`)
-
-func (a *Agent) buildRedisRestartCountKeyName() string {
-	return fmt.Sprintf("jobset-uid:%s:%s", a.workerJobsetUid, redisRestartCountKeySuffix)
+func (a *Agent) buildValkeyRestartCountKeyName() string {
+	return fmt.Sprintf("jobset-uid:%s:%s", a.workerJobsetUid, valkeyRestartCountKeySuffix)
 }
 
-func (a *Agent) buildRedisTotalRestartCountKeyName() string {
-	return fmt.Sprintf("jobset-uid:%s:%s", a.workerJobsetUid, redisTotalRestartCountKeySuffix)
+func (a *Agent) buildValkeyTotalRestartCountKeyName() string {
+	return fmt.Sprintf("jobset-uid:%s:%s", a.workerJobsetUid, valkeyTotalRestartCountKeySuffix)
 }
 
 func (a *Agent) getContainer(ctx context.Context, podUid string, containerName string) (*runtimeapi.Container, error) {

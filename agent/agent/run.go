@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
 	"k8s.io/klog/v2"
 )
 
@@ -14,7 +14,8 @@ func (a *Agent) Run(ctx context.Context) {
 	klog.Infof("Running agent")
 	ticker := time.NewTicker(a.criPollingInterval)
 	defer ticker.Stop()
-	broadcastChannel := a.redisSubscription.Channel()
+	broadcastChannel := a.getBroadcastChannel(ctx)
+	defer close(broadcastChannel)
 	for {
 		select {
 		case <-ticker.C:
@@ -65,16 +66,16 @@ func (a *Agent) handleWorkerRestartedCase(ctx context.Context) {
 	klog.Infof("Handling worker restarted case")
 	newRestartCount := intPtr(*a.restartCount + 1)
 	newTotalRestartCount := intPtr(*a.totalRestartCount + 1)
-	err := a.updateCountVariablesToRedis(ctx, newRestartCount, newTotalRestartCount)
+	err := a.updateCountVariablesToValkey(ctx, newRestartCount, newTotalRestartCount)
 	if err != nil {
-		klog.Errorf("Failed to update restart count and total restart count in transaction to Redis: %v", err)
+		klog.Errorf("Failed to update restart count and total restart count in transaction to Valkey: %v", err)
 		return
 	}
 	a.restartCount = newRestartCount
 	a.totalRestartCount = newTotalRestartCount
 }
 
-func (a *Agent) handleBroadcastMessage(ctx context.Context, message *redis.Message) {
+func (a *Agent) handleBroadcastMessage(ctx context.Context, message valkey.PubSubMessage) {
 	klog.Infof("Handling broadcast message")
 	if *a.restartCount < 0 || *a.totalRestartCount < 0 {
 		klog.V(2).Infof("Stored counts are negative. Setting request to full recreation")
@@ -82,7 +83,7 @@ func (a *Agent) handleBroadcastMessage(ctx context.Context, message *redis.Messa
 		return
 	}
 	var messageData MessageData
-	err := json.Unmarshal([]byte(message.Payload), &messageData)
+	err := json.Unmarshal([]byte(message.Message), &messageData)
 	if err != nil {
 		klog.Errorf("Failed to unmarshall broadcast message data from JSON: %v", err)
 		return
@@ -119,9 +120,9 @@ func (a *Agent) setRequestToFullRecreation(ctx context.Context) {
 	newTotalRestartCount := intPtr(-999)
 	a.restartCount = newRestartCount
 	a.totalRestartCount = newTotalRestartCount
-	err := a.updateCountVariablesToRedis(ctx, newRestartCount, newTotalRestartCount)
+	err := a.updateCountVariablesToValkey(ctx, newRestartCount, newTotalRestartCount)
 	if err != nil {
-		klog.Errorf("Failed to update restart count and total restart count in transaction to Redis: %v", err)
+		klog.Errorf("Failed to update restart count and total restart count in transaction to Valkey: %v", err)
 		return
 	}
 }

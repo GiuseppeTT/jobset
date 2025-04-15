@@ -7,7 +7,7 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/local"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
@@ -19,13 +19,9 @@ func (a *Agent) Initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to CRI: %w", err)
 	}
-	err = a.connectToRedis(ctx)
+	err = a.connectToValkey(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to connect Redis: %w", err)
-	}
-	err = a.subscribeToBroadcastChannel(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to broadcast channel: %w", err)
+		return fmt.Errorf("failed to connect to Valkey: %w", err)
 	}
 	err = a.handleInitializationCases(ctx)
 	if err != nil {
@@ -47,34 +43,23 @@ func (a *Agent) connectToCri() error {
 	return nil
 }
 
-func (a *Agent) connectToRedis(ctx context.Context) error {
-	klog.Infof("Connecting to Redis")
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: a.redisAddress,
-		DB:   0,
-	})
-	_, err := redisClient.Ping(ctx).Result()
+func (a *Agent) connectToValkey(ctx context.Context) error {
+	klog.Infof("Connecting to Valkey")
+	valkeyClient, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{a.valkeyAddress}})
 	if err != nil {
-		return fmt.Errorf("failed to ping Redis: %w", err)
+		return fmt.Errorf("failed to create Valkey client: %w", err)
 	}
-	a.redisClient = redisClient
-	return nil
-}
-
-func (a *Agent) subscribeToBroadcastChannel(ctx context.Context) error {
-	klog.Infof("Subscribing to broadcast channel")
-	redisSubscription := a.redisClient.Subscribe(ctx, a.redisBroadcastChannelName)
-	_, err := redisSubscription.Receive(ctx)
+	err = valkeyClient.Do(ctx, valkeyClient.B().Ping().Build()).Error()
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to broadcast channel: %w", err)
+		return fmt.Errorf("failed to ping Valkey: %w", err)
 	}
-	a.redisSubscription = redisSubscription
+	a.valkeyClient = valkeyClient
 	return nil
 }
 
 func (a *Agent) handleInitializationCases(ctx context.Context) error {
 	klog.Infof("Handling initialization cases")
-	restartCount, totalRestartCount, err := a.getCountVariablesFromRedis(ctx)
+	restartCount, totalRestartCount, err := a.getCountVariablesFromValkey(ctx)
 	if err != nil {
 		return err
 	}
@@ -102,7 +87,7 @@ func (a *Agent) handlePodCreatedCase(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	err = a.initializeCountVariablesToRedis(ctx, newRestartCount, newTotalRestartCount)
+	err = a.initializeCountVariablesToValkey(ctx, newRestartCount, newTotalRestartCount)
 	if err != nil {
 		return err
 	}
@@ -111,11 +96,11 @@ func (a *Agent) handlePodCreatedCase(ctx context.Context) error {
 	return nil
 }
 
-func (a *Agent) handlePodCreatedIndepententlyCase(ctx context.Context, redisTotalRestartCount *int) error {
+func (a *Agent) handlePodCreatedIndepententlyCase(ctx context.Context, valkeyTotalRestartCount *int) error {
 	klog.Infof("Handling pod created independently case")
 	newRestartCount := intPtr(0)
-	newTotalRestartCount := intPtr(*redisTotalRestartCount + 1)
-	err := a.updateCountVariablesToRedis(ctx, newRestartCount, newTotalRestartCount)
+	newTotalRestartCount := intPtr(*valkeyTotalRestartCount + 1)
+	err := a.updateCountVariablesToValkey(ctx, newRestartCount, newTotalRestartCount)
 	if err != nil {
 		return err
 	}
@@ -128,10 +113,10 @@ func (a *Agent) handlePodCreatedIndepententlyCase(ctx context.Context, redisTota
 	return nil
 }
 
-func (a *Agent) handleAgentRestartedCase(redisRestartCount *int, redisTotalRestartCount *int) error {
+func (a *Agent) handleAgentRestartedCase(valkeyRestartCount *int, valkeyTotalRestartCount *int) error {
 	klog.Infof("Handling agent restarted case")
-	a.restartCount = redisRestartCount
-	a.totalRestartCount = redisTotalRestartCount
+	a.restartCount = valkeyRestartCount
+	a.totalRestartCount = valkeyTotalRestartCount
 	return nil
 }
 
@@ -148,6 +133,5 @@ func (a *Agent) serveReadyProbe() {
 func (a *Agent) Close() {
 	klog.Infof("Closing agent")
 	a.criCon.Close()
-	a.redisSubscription.Close()
-	a.redisClient.Close()
+	a.valkeyClient.Close()
 }

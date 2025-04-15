@@ -11,15 +11,15 @@ import (
 )
 
 var (
-	workerJobsetUid           = flag.String("worker-jobset-uid", "", "JobSet UID of the worker")
-	workerId                  = flag.String("worker-id", "", "ID of the worker")
-	workerPodUid              = flag.String("worker-pod-uid", "", "Pod UID of the worker")
-	workerContainerName       = flag.String("worker-container-name", "", "Container name of the worker")
-	workerTerminationPeriod   = flag.Duration("worker-termination-grace-period", -1, "Termination grace period of the worker when it must be killed")
-	criSocketPath             = flag.String("cri-socket-path", "", "Path of the CRI socket")
-	criPollingInterval        = flag.Duration("cri-polling-interval", -1, "Polling interval for the CRI API")
-	redisAddress              = flag.String("redis-address", "", "Address of the Redis service")
-	redisBroadcastChannelName = flag.String("redis-broadcast-channel-name", "", "Name of the broadcast channel")
+	workerJobsetUid            = flag.String("worker-jobset-uid", "", "JobSet UID of the worker")
+	workerId                   = flag.String("worker-id", "", "ID of the worker")
+	workerPodUid               = flag.String("worker-pod-uid", "", "Pod UID of the worker")
+	workerContainerName        = flag.String("worker-container-name", "", "Container name of the worker")
+	workerTerminationPeriod    = flag.Duration("worker-termination-grace-period", -1, "Termination grace period of the worker when it must be killed")
+	criSocketPath              = flag.String("cri-socket-path", "", "Path of the CRI socket")
+	criPollingInterval         = flag.Duration("cri-polling-interval", -1, "Polling interval for the CRI API")
+	valkeyAddress              = flag.String("valkey-address", "", "Address of the Valkey service")
+	valkeyBroadcastChannelName = flag.String("valkey-broadcast-channel-name", "", "Name of the broadcast channel")
 )
 
 func main() {
@@ -39,8 +39,8 @@ func main() {
 		*workerTerminationPeriod,
 		*criSocketPath,
 		*criPollingInterval,
-		*redisAddress,
-		*redisBroadcastChannelName,
+		*valkeyAddress,
+		*valkeyBroadcastChannelName,
 	)
 	ctx := context.Background()
 	err = agent.Initialize(ctx)
@@ -77,11 +77,11 @@ func parseFlags() error {
 	if *criPollingInterval < 0 {
 		return fmt.Errorf("argument '--cri-polling-interval' is required")
 	}
-	if *redisAddress == "" {
-		return fmt.Errorf("argument '--redis-address' is required")
+	if *valkeyAddress == "" {
+		return fmt.Errorf("argument '--valkey-address' is required")
 	}
-	if *redisBroadcastChannelName == "" {
-		return fmt.Errorf("argument '--redis-broadcast-channel-name' is required")
+	if *valkeyBroadcastChannelName == "" {
+		return fmt.Errorf("argument '--valkey-broadcast-channel-name' is required")
 	}
 	return nil
 }
