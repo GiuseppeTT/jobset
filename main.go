@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -25,7 +24,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -199,15 +198,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup Redis client
-	// TODO: Get Redis address from arguments instead of hardcoding
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: "redis.default.svc.cluster.local:6379",
-		DB:   0,
-	})
-	_, err = redisClient.Ping(context.Background()).Result()
+	// Setup Valkey client
+	// TODO: Get Valkey address from arguments instead of hardcoding
+	valkeyClient, err := valkey.NewClient(valkey.ClientOption{InitAddress: []string{"valkey.default.svc.cluster.local:6379"}})
 	if err != nil {
-		setupLog.Error(err, "unable to setup Redis client")
+		setupLog.Error(err, "unable to setup Valkey client")
+		os.Exit(1)
+	}
+	err = valkeyClient.Do(ctx, valkeyClient.B().Ping().Build()).Error()
+	if err != nil {
+		setupLog.Error(err, "unable to ping Valkey")
 		os.Exit(1)
 	}
 
@@ -217,7 +217,7 @@ func main() {
 		PollingInterval:      1 * time.Second,
 		BroadcastChannelName: "broadcast-channel",
 	}
-	orchestrator, err := inplace.NewOrchestrator(mgr.GetClient(), redisClient, orchestratorOptions)
+	orchestrator, err := inplace.NewOrchestrator(mgr.GetClient(), valkeyClient, orchestratorOptions)
 	if err != nil {
 		setupLog.Error(err, "unable to create in place pod restart orchestrator")
 		os.Exit(1)
@@ -230,7 +230,7 @@ func main() {
 	// Cert won't be ready until manager starts, so start a goroutine here which
 	// will block until the cert is ready before setting up the controllers.
 	// Controllers who register after manager starts will start directly.
-	go setupControllers(mgr, redisClient, certsReady)
+	go setupControllers(mgr, valkeyClient, certsReady)
 
 	setupHealthzAndReadyzCheck(mgr, certsReady)
 
@@ -241,7 +241,7 @@ func main() {
 	}
 }
 
-func setupControllers(mgr ctrl.Manager, redisClient *redis.Client, certsReady chan struct{}) {
+func setupControllers(mgr ctrl.Manager, valkeyClient valkey.Client, certsReady chan struct{}) {
 	// The controllers won't work until the webhooks are operating,
 	// and the webhook won't work until the certs are all in places.
 	setupLog.Info("waiting for the cert generation to complete")
@@ -249,7 +249,7 @@ func setupControllers(mgr ctrl.Manager, redisClient *redis.Client, certsReady ch
 	setupLog.Info("certs ready")
 
 	// Set up JobSet controller.
-	jobSetController := controllers.NewJobSetReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("jobset"), redisClient)
+	jobSetController := controllers.NewJobSetReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("jobset"), valkeyClient)
 	if err := jobSetController.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "JobSet")
 		os.Exit(1)

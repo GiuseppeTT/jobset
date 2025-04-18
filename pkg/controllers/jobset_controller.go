@@ -26,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
 	"k8s.io/utils/clock"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -56,10 +57,10 @@ var apiGVStr = jobset.GroupVersion.String()
 // JobSetReconciler reconciles a JobSet object
 type JobSetReconciler struct {
 	client.Client
-	Scheme      *runtime.Scheme
-	Record      record.EventRecorder
-	clock       clock.Clock
-	redisClient *redis.Client
+	Scheme       *runtime.Scheme
+	Record       record.EventRecorder
+	clock        clock.Clock
+	valkeyClient valkey.Client
 }
 
 type childJobs struct {
@@ -93,8 +94,8 @@ type eventParams struct {
 	eventMessage string
 }
 
-func NewJobSetReconciler(client client.Client, scheme *runtime.Scheme, record record.EventRecorder, redisClient *redis.Client) *JobSetReconciler {
-	return &JobSetReconciler{Client: client, Scheme: scheme, Record: record, clock: clock.RealClock{}, redisClient: redisClient}
+func NewJobSetReconciler(client client.Client, scheme *runtime.Scheme, record record.EventRecorder, valkeyClient valkey.Client) *JobSetReconciler {
+	return &JobSetReconciler{Client: client, Scheme: scheme, Record: record, clock: clock.RealClock{}, valkeyClient: valkeyClient}
 }
 
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;watch;update;patch

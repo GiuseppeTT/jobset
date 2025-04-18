@@ -13,7 +13,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/valkey-io/valkey-go"
 )
 
 // Move constants to jobset_types.go
@@ -33,9 +33,9 @@ const (
 )
 
 type Orchestrator struct {
-	kubeClient  client.Client
-	redisClient *redis.Client
-	options     OrchestratorOptions
+	kubeClient   client.Client
+	valkeyClient valkey.Client
+	options      OrchestratorOptions
 }
 
 type OrchestratorOptions struct {
@@ -60,11 +60,11 @@ type MessageData struct {
 	DesiredTotalRestartCount int `json:"desiredTotalRestartCount"`
 }
 
-func NewOrchestrator(kubeClient client.Client, redisClient *redis.Client, options OrchestratorOptions) (*Orchestrator, error) {
+func NewOrchestrator(kubeClient client.Client, valkeyClient valkey.Client, options OrchestratorOptions) (*Orchestrator, error) {
 	return &Orchestrator{
-		kubeClient:  kubeClient,
-		redisClient: redisClient,
-		options:     options,
+		kubeClient:   kubeClient,
+		valkeyClient: valkeyClient,
+		options:      options,
 	}, nil
 }
 
@@ -73,7 +73,6 @@ func (o *Orchestrator) NeedLeaderElection() bool {
 }
 
 func (o *Orchestrator) Start(ctx context.Context) error {
-	defer o.redisClient.Close()
 	ticker := time.NewTicker(o.options.PollingInterval)
 	defer ticker.Stop()
 	for {
@@ -89,9 +88,9 @@ func (o *Orchestrator) Start(ctx context.Context) error {
 func (o *Orchestrator) pollAllWorkloads(ctx context.Context) {
 	log := ctrl.LoggerFrom(ctx).WithName("orchestrator")
 	log.Info("polling all workloads")
-	allKeys, err := o.getAllKeysFromRedis(ctx)
+	allKeys, err := o.getAllKeysFromValkey(ctx)
 	if err != nil {
-		log.Error(err, "failed to get all keys from Redis")
+		log.Error(err, "failed to get all keys from Valkey")
 		return
 	}
 	jobsetUids, err := o.extractJobsetUidsFromKeys(allKeys)
@@ -105,9 +104,9 @@ func (o *Orchestrator) pollAllWorkloads(ctx context.Context) {
 }
 
 // TODO: Refactor to use SCAN
-func (o *Orchestrator) getAllKeysFromRedis(ctx context.Context) ([]string, error) {
+func (o *Orchestrator) getAllKeysFromValkey(ctx context.Context) ([]string, error) {
 	pattern := fmt.Sprintf("%s:*", jobSetUidKeyPrefix)
-	keys, err := o.redisClient.Keys(ctx, pattern).Result()
+	keys, err := o.valkeyClient.Do(ctx, o.valkeyClient.B().Keys().Pattern(pattern).Build()).AsStrSlice()
 	if err != nil {
 		return []string{}, err
 	}
@@ -132,9 +131,9 @@ func (o *Orchestrator) extractJobsetUidsFromKeys(keys []string) ([]string, error
 func (o *Orchestrator) pollWorkload(ctx context.Context, jobsetUid string) {
 	log := ctrl.LoggerFrom(ctx).WithName("orchestrator").WithValues("jobset-uid", jobsetUid)
 	log.Info("polling workload")
-	workloadData, err := o.getWorkloadDataFromRedis(ctx, jobsetUid)
+	workloadData, err := o.getWorkloadDataFromValkey(ctx, jobsetUid)
 	if err != nil {
-		log.Error(err, "failed to get workload data from Redis")
+		log.Error(err, "failed to get workload data from Valkey")
 		return
 	}
 	log.Info(fmt.Sprintf("workload data: %#v", workloadData)) // TODO: Remove after finishing function
@@ -145,8 +144,8 @@ func (o *Orchestrator) pollWorkload(ctx context.Context, jobsetUid string) {
 	}
 }
 
-func (o *Orchestrator) getWorkloadDataFromRedis(ctx context.Context, jobsetUid string) (WorkloadData, error) {
-	rawWorkerCount, rawTimeoutDuration, rawState, rawTotalRestartCountByWorkerId, err := o.getRawWorkloadDataFromRedis(ctx, jobsetUid)
+func (o *Orchestrator) getWorkloadDataFromValkey(ctx context.Context, jobsetUid string) (WorkloadData, error) {
+	rawWorkerCount, rawTimeoutDuration, rawState, rawTotalRestartCountByWorkerId, err := o.getRawWorkloadDataFromValkey(ctx, jobsetUid)
 	if err != nil {
 		return WorkloadData{}, err
 	}
@@ -157,22 +156,43 @@ func (o *Orchestrator) getWorkloadDataFromRedis(ctx context.Context, jobsetUid s
 	return workloadData, nil
 }
 
-func (o *Orchestrator) getRawWorkloadDataFromRedis(ctx context.Context, jobsetUid string) (string, string, map[string]string, map[string]string, error) {
-	var workerCount *redis.StringCmd
-	var timeoutDuration *redis.StringCmd
-	var state *redis.MapStringStringCmd
-	var totalRestartCountByWorkerId *redis.MapStringStringCmd
-	_, err := o.redisClient.TxPipelined(ctx, func(transaction redis.Pipeliner) error {
-		workerCount = transaction.Get(ctx, o.buildRedisWorkerCountKeyName(jobsetUid))
-		timeoutDuration = transaction.Get(ctx, o.buildRedisTimeoutDurationKeyName(jobsetUid))
-		state = transaction.HGetAll(ctx, o.buildRedisStateKeyName(jobsetUid))
-		totalRestartCountByWorkerId = transaction.HGetAll(ctx, o.buildRedisTotalRestartCountByWorkerIdKeyName(jobsetUid))
-		return nil
-	})
-	if err != nil {
-		return "", "", map[string]string{}, map[string]string{}, fmt.Errorf("failed to get workload data in transaction from Redis: %w", err)
+func (o *Orchestrator) getRawWorkloadDataFromValkey(ctx context.Context, jobsetUid string) (string, string, map[string]string, map[string]string, error) {
+	script := valkey.NewLuaScript(`
+	local value1 = server.call('GET', KEYS[1])
+	local value2 = server.call('GET', KEYS[2])
+	local value3 = server.call('HGETALL', KEYS[3])
+	local value4 = server.call('HGETALL', KEYS[4])
+
+	return { value1, value2, value3, value4 }
+	`)
+	keys := []string{
+		o.buildValkeyWorkerCountKeyName(jobsetUid),
+		o.buildValkeyTimeoutDurationKeyName(jobsetUid),
+		o.buildValkeyStateKeyName(jobsetUid),
+		o.buildValkeyTotalRestartCountByWorkerIdKeyName(jobsetUid),
 	}
-	return workerCount.Val(), timeoutDuration.Val(), state.Val(), totalRestartCountByWorkerId.Val(), nil
+	args := []string{}
+	list, err := script.Exec(ctx, o.valkeyClient, keys, args).ToArray()
+	if err != nil {
+		return "", "", map[string]string{}, map[string]string{}, fmt.Errorf("failed to get workload data from Valkey: %w", err)
+	}
+	workerCount, err := list[0].ToString()
+	if err != nil {
+		return "", "", map[string]string{}, map[string]string{}, fmt.Errorf("failed to extract value from restart count: %w", err)
+	}
+	timeoutDuration, err := list[1].ToString()
+	if err != nil {
+		return "", "", map[string]string{}, map[string]string{}, fmt.Errorf("failed to extract value from timeout duration: %w", err)
+	}
+	state, err := list[2].AsStrMap()
+	if err != nil {
+		return "", "", map[string]string{}, map[string]string{}, fmt.Errorf("failed to extract value from state: %w", err)
+	}
+	totalRestartCountByWorkerId, err := list[3].AsStrMap()
+	if err != nil {
+		return "", "", map[string]string{}, map[string]string{}, fmt.Errorf("failed to extract value from total restart count by worker id: %w", err)
+	}
+	return workerCount, timeoutDuration, state, totalRestartCountByWorkerId, nil
 }
 
 func (o *Orchestrator) parseWorkloadData(rawWorkerCount string, rawTimeoutDuration string, rawState map[string]string, rawTotalRestartCountByWorkerId map[string]string) (WorkloadData, error) {
@@ -214,19 +234,19 @@ func (o *Orchestrator) parseWorkloadData(rawWorkerCount string, rawTimeoutDurati
 	return workloadData, nil
 }
 
-func (o *Orchestrator) buildRedisWorkerCountKeyName(jobsetUid string) string {
+func (o *Orchestrator) buildValkeyWorkerCountKeyName(jobsetUid string) string {
 	return fmt.Sprintf("%s:%s:%s", jobSetUidKeyPrefix, jobsetUid, workerCountKeySufix)
 }
 
-func (o *Orchestrator) buildRedisTimeoutDurationKeyName(jobsetUid string) string {
+func (o *Orchestrator) buildValkeyTimeoutDurationKeyName(jobsetUid string) string {
 	return fmt.Sprintf("%s:%s:%s", jobSetUidKeyPrefix, jobsetUid, timeoutDurationKeySufix)
 }
 
-func (o *Orchestrator) buildRedisStateKeyName(jobsetUid string) string {
+func (o *Orchestrator) buildValkeyStateKeyName(jobsetUid string) string {
 	return fmt.Sprintf("%s:%s:%s", jobSetUidKeyPrefix, jobsetUid, stateKeySufix)
 }
 
-func (o *Orchestrator) buildRedisTotalRestartCountByWorkerIdKeyName(jobsetUid string) string {
+func (o *Orchestrator) buildValkeyTotalRestartCountByWorkerIdKeyName(jobsetUid string) string {
 	return fmt.Sprintf("%s:%s:%s", jobSetUidKeyPrefix, jobsetUid, totalRestartCountByWorkerIdKeySufix)
 }
 
@@ -299,9 +319,9 @@ func (o *Orchestrator) handleWorkloadRunningCase(ctx context.Context, jobsetUid 
 func (o *Orchestrator) handleWorkloadRestartingCase(ctx context.Context, jobsetUid string, workloadData WorkloadData) error {
 	log := ctrl.LoggerFrom(ctx).WithName("orchestrator").WithValues("jobset-uid", jobsetUid)
 	log.Info("handle workload restarting case")
-	now, err := o.redisClient.Time(ctx).Result()
+	now, err := o.getCurrentTimeFromValkey(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get current time from Redis: %w", err)
+		return err
 	}
 	if now.After(workloadData.State.StartTime.Add(workloadData.TimeoutDuration)) {
 		log.Error(nil, "full restart timed out. Starting full recreation")
@@ -354,18 +374,17 @@ func (o *Orchestrator) handleWorkloadRecreatingCase(ctx context.Context, jobsetU
 func (o *Orchestrator) startFullRunning(ctx context.Context, jobsetUid string, newDesiredTotalRestartCount int) error {
 	log := ctrl.LoggerFrom(ctx).WithName("orchestrator").WithValues("jobset-uid", jobsetUid)
 	log.Info("start full running")
-	now, err := o.redisClient.Time(ctx).Result()
+	now, err := o.getCurrentTimeFromValkey(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get current time from Redis: %w", err)
+		return err
 	}
-	state := map[string]string{
-		stateNameKeyName:                     stateNameRunning,
-		stateStartTimeKeyName:                now.Format(time.RFC3339),
-		stateDesiredTotalRestartCountKeyName: strconv.Itoa(newDesiredTotalRestartCount),
-	}
-	err = o.redisClient.HSet(ctx, o.buildRedisStateKeyName(jobsetUid), state).Err()
+	err = o.valkeyClient.Do(ctx, o.valkeyClient.B().Hset().Key(o.buildValkeyStateKeyName(jobsetUid)).FieldValue().
+		FieldValue(stateNameKeyName, stateNameRunning).
+		FieldValue(stateStartTimeKeyName, now.Format(time.RFC3339)).
+		FieldValue(stateDesiredTotalRestartCountKeyName, strconv.Itoa(newDesiredTotalRestartCount)).
+		Build()).Error()
 	if err != nil {
-		return fmt.Errorf("failed to update workload state to Redis: %w", err)
+		return fmt.Errorf("failed to update workload state to Valkey: %w", err)
 	}
 	return nil
 }
@@ -380,22 +399,30 @@ func (o *Orchestrator) startFullRestart(ctx context.Context, jobsetUid string, n
 	if err != nil {
 		return fmt.Errorf("failed to marshall message data to JSON: %w", err)
 	}
-	now, err := o.redisClient.Time(ctx).Result()
+	now, err := o.getCurrentTimeFromValkey(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get current time from Redis: %w", err)
+		return err
 	}
-	state := map[string]string{
-		stateNameKeyName:                     stateNameRestarting,
-		stateStartTimeKeyName:                now.Format(time.RFC3339),
-		stateDesiredTotalRestartCountKeyName: strconv.Itoa(newDesiredTotalRestartCount),
+	script := valkey.NewLuaScript(`
+	server.call('HSET', KEYS[1], ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6])
+	server.call('PUBLISH', ARGV[7], ARGV[8])
+	`)
+	keys := []string{
+		o.buildValkeyStateKeyName(jobsetUid),
 	}
-	_, err = o.redisClient.TxPipelined(ctx, func(transaction redis.Pipeliner) error {
-		transaction.Publish(ctx, o.options.BroadcastChannelName, string(jsonData))
-		transaction.HSet(ctx, o.buildRedisStateKeyName(jobsetUid), state)
-		return nil
-	})
+	args := []string{
+		stateNameKeyName,
+		stateNameRestarting,
+		stateStartTimeKeyName,
+		now.Format(time.RFC3339),
+		stateDesiredTotalRestartCountKeyName,
+		strconv.Itoa(newDesiredTotalRestartCount),
+		o.options.BroadcastChannelName,
+		string(jsonData),
+	}
+	err = script.Exec(ctx, o.valkeyClient, keys, args).Error()
 	if err != nil {
-		return fmt.Errorf("failed to publish restart signal and update workload state in transaction to Redis: %w", err)
+		return fmt.Errorf("failed to publish restart signal and update workload state to Valkey: %w", err)
 	}
 	return nil
 }
@@ -407,9 +434,9 @@ func (o *Orchestrator) startFullRecreation(ctx context.Context, jobsetUid string
 	if err != nil {
 		return fmt.Errorf("failed to delete child jobs: %w", err)
 	}
-	err = o.setStateToRecreatingAndRemoveWorkerDataFromRedis(ctx, jobsetUid)
+	err = o.setStateToRecreatingAndRemoveWorkerDataFromValkey(ctx, jobsetUid)
 	if err != nil {
-		return fmt.Errorf("failed to update workload state and remove worker data from Redis: %w", err)
+		return fmt.Errorf("failed to update workload state and remove worker data from Valkey: %w", err)
 	}
 	return nil
 }
@@ -439,24 +466,34 @@ func (o *Orchestrator) listChildJobs(ctx context.Context, jobsetUid string) (bat
 	return childJobs, nil
 }
 
-func (o *Orchestrator) setStateToRecreatingAndRemoveWorkerDataFromRedis(ctx context.Context, jobsetUid string) error {
-	now, err := o.redisClient.Time(ctx).Result()
+func (o *Orchestrator) setStateToRecreatingAndRemoveWorkerDataFromValkey(ctx context.Context, jobsetUid string) error {
+	now, err := o.getCurrentTimeFromValkey(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get current time from Redis: %w", err)
+		return err
 	}
 	state := map[string]string{
 		stateNameKeyName:                     stateNameRecreating,
 		stateStartTimeKeyName:                now.Format(time.RFC3339),
 		stateDesiredTotalRestartCountKeyName: "0",
 	}
-	_, err = o.redisClient.TxPipelined(ctx, func(transaction redis.Pipeliner) error {
-		o.redisClient.HSet(ctx, o.buildRedisStateKeyName(jobsetUid), state).Err()
+	_, err = o.valkeyClient.TxPipelined(ctx, func(transaction valkey.Pipeliner) error {
+		o.valkeyClient.HSet(ctx, o.buildValkeyStateKeyName(jobsetUid), state).Err()
 		transaction.Del(ctx, fmt.Sprintf("jobset-uid:%s:restart-count-by-worker-id", jobsetUid))
 		transaction.Del(ctx, fmt.Sprintf("jobset-uid:%s:total-restart-count-by-worker-id", jobsetUid))
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("failed to update workload state and remove worker data from Redis: %w", err)
+		return fmt.Errorf("failed to update workload state and remove worker data from Valkey: %w", err)
 	}
 	return nil
+}
+
+func (o *Orchestrator) getCurrentTimeFromValkey(ctx context.Context) (time.Time, error) {
+	timestamps, err := o.valkeyClient.Do(ctx, o.valkeyClient.B().Time().Build()).AsStrSlice()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to get current time from Valkey: %w", err)
+	}
+	unixSeconds, err := strconv.ParseInt(timestamps[0], 10, 64)
+	now := time.Unix(unixSeconds, 0)
+	return now, nil
 }
