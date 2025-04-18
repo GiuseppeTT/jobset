@@ -15,6 +15,9 @@ spec:
       containers:
       - name: redis
         image: redis:7.4.2-alpine
+        args:
+        - "--maxclients"
+        - "20000" # Should be a little bit bigger than 2 * number of workers
         ports:
         - containerPort: 6379
 ---
