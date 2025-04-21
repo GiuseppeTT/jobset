@@ -1,0 +1,42 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: base-3k
+  annotations:
+    alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+spec:
+  failurePolicy:
+    maxRestarts: 20
+  replicatedJobs:
+  - name: workers
+    replicas: 5
+    template:
+      spec:
+        completions: 600
+        parallelism: 600
+        backoffLimit: 0
+        template:
+          spec:
+            restartPolicy: Never
+            terminationGracePeriodSeconds: 0
+            containers:
+            - name: worker
+              image: busybox
+              command: ['/bin/sh', '-c']
+              args:
+              - |
+                echo "Start"
+
+                while true; do
+                  if [ -f /tmp/fail ]; then
+                    echo "Exiting 1"
+                    exit 1;
+                  fi;
+                  if [ -f /tmp/succeed ]; then
+                    echo "Exiting 0"
+                    exit 0;
+                  fi;
+                  sleep 1;
+                done
+
+                echo "End"

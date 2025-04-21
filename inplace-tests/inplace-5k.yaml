@@ -1,0 +1,108 @@
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: inplace-5k
+  annotations:
+    alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+spec:
+  failurePolicy:
+    maxRestarts: 20
+    restartStrategy: RestartInPlace
+    restartTimeoutSeconds: 60
+  replicatedJobs:
+  - name: workers
+    replicas: 5
+    template:
+      spec:
+        completions: 1000
+        parallelism: 1000
+        backoffLimit: 9999999
+        template:
+          spec:
+            restartPolicy: OnFailure
+            terminationGracePeriodSeconds: 0
+            volumes:
+            - name: cri-socket
+              hostPath:
+                path: /run/containerd/containerd.sock
+                type: Socket
+            - name: startup-volume
+              emptyDir: {}
+            initContainers:
+            - name: agent
+              restartPolicy: Always
+              securityContext:
+                privileged: true
+              image: <CHANGE ME>
+              args:
+              - "--worker-jobset-uid=$(JOBSET_UID)"
+              - "--worker-id=$(JOBSET_NAME)-$(REPLICATED_JOB_NAME)-$(JOB_INDEX)-$(JOB_COMPLETION_INDEX)"
+              - "--worker-pod-uid=$(POD_UID)"
+              - "--worker-container-name=worker"
+              - "--worker-termination-grace-period=0"
+              - "--cri-socket-path=unix:///run/containerd/containerd.sock"
+              - "--cri-polling-interval=0.1s"
+              - "--redis-address=redis.default.svc.cluster.local:6379"
+              - "--redis-broadcast-channel-name=broadcast-channel"
+              #- "-v=2"
+              env:
+              - name: JOBSET_UID
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-uid']
+              - name: JOBSET_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-name']
+              - name: REPLICATED_JOB_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/replicatedjob-name']
+              - name: JOB_INDEX
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/job-index']
+              - name: JOB_COMPLETION_INDEX
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['batch.kubernetes.io/job-completion-index']
+              - name: POD_UID
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.uid
+              volumeMounts:
+              - name: cri-socket
+                mountPath: /run/containerd/containerd.sock
+              - name: startup-volume
+                mountPath: /app/startup
+              ports:
+              - containerPort: 80
+              startupProbe:
+                httpGet:
+                  path: /ready
+                  port: 80
+                initialDelaySeconds: 0
+                periodSeconds: 1
+                successThreshold: 1
+                failureThreshold: 60
+            containers:
+            - name: worker
+              image: busybox
+              command: ['/bin/sh', '-c']
+              args:
+              - |
+                echo "Start"
+
+                while true; do
+                  if [ -f /tmp/fail ]; then
+                    echo "Exiting 1"
+                    exit 1;
+                  fi;
+                  if [ -f /tmp/succeed ]; then
+                    echo "Exiting 0"
+                    exit 0;
+                  fi;
+                  sleep 1;
+                done
+
+                echo "End"
