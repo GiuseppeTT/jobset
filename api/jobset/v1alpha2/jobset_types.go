@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	JobSetUidKey          string = "jobset.sigs.k8s.io/jobset-uid"
 	JobSetNameKey         string = "jobset.sigs.k8s.io/jobset-name"
 	JobSetUIDKey          string = "jobset.sigs.k8s.io/jobset-uid"
 	ReplicatedJobReplicas string = "jobset.sigs.k8s.io/replicatedjob-replicas"
