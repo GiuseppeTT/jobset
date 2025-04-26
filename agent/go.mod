@@ -1,6 +1,6 @@
 module agent
 
-go 1.25
+go 1.24.0
 
 require (
 	github.com/valkey-io/valkey-go v1.0.57
