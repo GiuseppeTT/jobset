@@ -11,6 +11,11 @@ import (
 	"k8s.io/klog/v2"
 )
 
+const (
+	badRestartCountValue      = -999
+	badTotalRestartCountvalue = -999
+)
+
 func (a *Agent) Run(ctx context.Context) {
 	klog.Info("Running agent")
 	ticker := time.NewTicker(a.criPollingInterval)
@@ -18,12 +23,23 @@ func (a *Agent) Run(ctx context.Context) {
 	broadcastChannel := a.getBroadcastChannel(ctx)
 	defer close(broadcastChannel)
 	for {
+		// If recreation is requested once, keep handling it until the
+		// orchestrator recreates all pods
+		if a.isFullRecreationRequested() {
+			a.handleRequestForFullRecreation(ctx)
+			continue
+		}
 		select {
 		case <-ticker.C:
 			a.pollWorkerContainer(ctx)
-			a.handleRequestForRestart(ctx)
+			// Optimization
+			// Handle request for restart right after a poll to ensure
+			// restart count is as fresh as possible
+			if a.isRestartRequested() {
+				a.handleRequestForRestart(ctx)
+			}
 		case message := <-broadcastChannel:
-			a.handleBroadcastMessage(ctx, message)
+			a.handleBroadcastMessage(message)
 		case <-ctx.Done():
 			return
 		}
@@ -32,11 +48,6 @@ func (a *Agent) Run(ctx context.Context) {
 
 func (a *Agent) pollWorkerContainer(ctx context.Context) {
 	klog.V(2).Info("Polling worker container")
-	if *a.restartCount < 0 || *a.totalRestartCount < 0 {
-		klog.V(2).Infof("Stored counts are negative. Setting request to full recreation")
-		a.setRequestToFullRecreation(ctx)
-		return
-	}
 	workerContainer, err := a.getContainer(ctx, a.workerPodUid, a.workerContainerName)
 	if err != nil {
 		klog.Errorf("Failed to get worker container: %v", err)
@@ -44,12 +55,12 @@ func (a *Agent) pollWorkerContainer(ctx context.Context) {
 	}
 	rawRestartCount, ok := workerContainer.Annotations[criRestartCountAnnotationKey]
 	if !ok {
-		klog.Error("Restart count annotation not found")
+		klog.Error("Failed to get restart count annotation from container")
 		return
 	}
 	restartCount, err := strconv.Atoi(rawRestartCount)
 	if err != nil {
-		klog.Errorf("Failed to convert restart count to integer: %v", err)
+		klog.Errorf("Failed to convert raw restart count '%s' to integer: %v", rawRestartCount, err)
 		return
 	}
 	klog.V(2).Infof("Polled restart count: %d", restartCount)
@@ -58,35 +69,51 @@ func (a *Agent) pollWorkerContainer(ctx context.Context) {
 		return
 	}
 	if restartCount == *a.restartCount+1 {
+		klog.Info("Single restart detected")
 		a.handleWorkerRestartedCase(ctx)
 		return
 	}
-	a.setRequestToFullRecreation(ctx)
+	klog.Errorf("Invalid combination detected. Stored restart count is '%d' and polled restart count is '%d'. Requesting full recreation", *a.restartCount, restartCount)
+	a.requestFullRecreation()
 }
 
 func (a *Agent) handleWorkerRestartedCase(ctx context.Context) {
 	klog.Info("Handling worker restarted case")
 	newRestartCount := intPtr(*a.restartCount + 1)
 	newTotalRestartCount := intPtr(*a.totalRestartCount + 1)
-	err := a.updateCountVariablesToValkey(ctx, newRestartCount, newTotalRestartCount)
+	err := a.updateCountsToValkey(ctx, newRestartCount, newTotalRestartCount)
 	if err != nil {
-		klog.Errorf("Failed to update restart count and total restart count in transaction to Valkey: %v", err)
+		klog.Errorf("Failed to update restart count and total restart count to Valkey: %v", err)
 		return
 	}
 	a.restartCount = newRestartCount
 	a.totalRestartCount = newTotalRestartCount
 }
 
+func (a *Agent) handleBroadcastMessage(message valkey.PubSubMessage) {
+	klog.Info("Handling broadcast message")
+	var messageData MessageData
+	err := json.Unmarshal([]byte(message.Message), &messageData)
+	if err != nil {
+		klog.Errorf("Failed to unmarshall broadcast message data from JSON: %v", err)
+		return
+	}
+	klog.Infof("Desired total restart count: %d", messageData.DesiredTotalRestartCount)
+	a.requestRestart(messageData.DesiredTotalRestartCount)
+}
+
+func (a *Agent) requestRestart(newDesiredTotalRestartCount int) {
+	klog.Info("Requesting restart")
+	a.desiredTotalRestartCount = intPtr(newDesiredTotalRestartCount)
+}
+
+func (a *Agent) isRestartRequested() bool {
+	klog.V(2).Info("Checking if restart is requested")
+	return !a.isFullRecreationRequested() && a.desiredTotalRestartCount != nil
+}
+
 func (a *Agent) handleRequestForRestart(ctx context.Context) {
-	if *a.restartCount < 0 || *a.totalRestartCount < 0 {
-		klog.V(2).Infof("Stored counts are negative. Setting request to full recreation")
-		a.setRequestToFullRecreation(ctx)
-		return
-	}
-	if a.desiredTotalRestartCount == nil {
-		return
-	}
-	klog.V(2).Info("Handling request for restart")
+	klog.Info("Handling request for restart")
 	if *a.desiredTotalRestartCount == *a.totalRestartCount {
 		klog.Infof("Restart not required. Desired total restart count is the same as the current total restart count")
 		a.desiredTotalRestartCount = nil
@@ -101,11 +128,12 @@ func (a *Agent) handleRequestForRestart(ctx context.Context) {
 		a.desiredTotalRestartCount = nil
 		return
 	}
-	a.setRequestToFullRecreation(ctx)
+	klog.Errorf("Invalid combination detected. Stored total restart count is '%d' and desired total restart count is '%d'. Requesting full recreation", *a.totalRestartCount, *a.desiredTotalRestartCount)
+	a.requestFullRecreation()
 }
 
 func (a *Agent) killWorkerContainer(ctx context.Context) error {
-	klog.Infof("Killing worker container")
+	klog.Info("Killing worker container")
 	workerContainer, err := a.getContainer(ctx, a.workerPodUid, a.workerContainerName)
 	if err != nil {
 		return fmt.Errorf("failed to get worker container: %v", err)
@@ -117,32 +145,24 @@ func (a *Agent) killWorkerContainer(ctx context.Context) error {
 	return nil
 }
 
-func (a *Agent) handleBroadcastMessage(ctx context.Context, message valkey.PubSubMessage) {
-	klog.Info("Handling broadcast message")
-	if *a.restartCount < 0 || *a.totalRestartCount < 0 {
-		klog.V(2).Info("Stored counts are negative. Setting request to full recreation")
-		a.setRequestToFullRecreation(ctx)
-		return
-	}
-	var messageData MessageData
-	err := json.Unmarshal([]byte(message.Message), &messageData)
-	if err != nil {
-		klog.Errorf("Failed to unmarshall broadcast message data from JSON: %v", err)
-		return
-	}
-	klog.Infof("Desired total restart count: %d", messageData.DesiredTotalRestartCount)
-	a.desiredTotalRestartCount = intPtr(messageData.DesiredTotalRestartCount)
+func (a *Agent) requestFullRecreation() {
+	klog.Info("Requesting full recreation")
+	a.restartCount = intPtr(badRestartCountValue)
+	a.totalRestartCount = intPtr(badTotalRestartCountvalue)
 }
 
-func (a *Agent) setRequestToFullRecreation(ctx context.Context) {
-	klog.Info("Setting request to full recreation")
-	newRestartCount := intPtr(-999)
-	newTotalRestartCount := intPtr(-999)
-	a.restartCount = newRestartCount
-	a.totalRestartCount = newTotalRestartCount
-	err := a.updateCountVariablesToValkey(ctx, newRestartCount, newTotalRestartCount)
+func (a *Agent) isFullRecreationRequested() bool {
+	klog.V(2).Info("Checking if full recreation is requested")
+	return (a.restartCount != nil && *a.restartCount < 0) || (a.totalRestartCount != nil && *a.totalRestartCount < 0)
+}
+
+func (a *Agent) handleRequestForFullRecreation(ctx context.Context) {
+	klog.Info("Handling request for full recreation")
+	badRestartCount := intPtr(badRestartCountValue)
+	badTotalRestartCount := intPtr(badTotalRestartCountvalue)
+	err := a.updateCountsToValkey(ctx, badRestartCount, badTotalRestartCount)
 	if err != nil {
-		klog.Errorf("Failed to update restart count and total restart count in transaction to Valkey: %v", err)
+		klog.Errorf("Failed to update restart count and total restart count to bad values to Valkey: %v", err)
 		return
 	}
 }
