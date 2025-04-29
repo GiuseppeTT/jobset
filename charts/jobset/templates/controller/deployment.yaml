@@ -33,6 +33,24 @@ spec:
       annotations:
         jobset.x-k8s.io/config-hash: {{ include (print $.Template.BasePath "/controller/configmap.yaml") . | sha256sum }}
     spec:
+      {{- if .Values.inPlacePodRestart.enabled }}
+      initContainers:
+      - name: orchestrator
+        restartPolicy: Always
+        image: "{{ .Values.inPlacePodRestart.orchestrator.image.repository }}:{{ .Values.inPlacePodRestart.orchestrator.image.tag | default .Chart.AppVersion }}"
+        command:
+        - /orchestrator        
+        args:
+        - "--valkey-address=valkey.{{ .Release.Namespace }}.svc.cluster.local:6379"
+        - "--polling-interval={{ .Values.inPlacePodRestart.orchestrator.args.pollingInterval }}"
+        - "--pod-uid=$(POD_UID)"
+        - "-v={{ .Values.inPlacePodRestart.orchestrator.args.logLevel }}"
+        env:
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+      {{- end }}
       containers:
       - name: controller
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
