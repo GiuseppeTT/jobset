@@ -11,9 +11,9 @@ import (
 )
 
 var (
-	valkeyAddress              = flag.String("valkey-address", "", "Address of the Valkey service")
-	valkeyBroadcastChannelName = flag.String("valkey-broadcast-channel-name", "", "Name of the broadcast channel")
-	valkeyPollingInterval      = flag.Duration("valkey-polling-interval", -1, "Polling interval for the CRI API")
+	valkeyAddress   = flag.String("valkey-address", "", "Address of the Valkey service")
+	pollingInterval = flag.Duration("polling-interval", -1, "Polling interval. The flag accepts a value acceptable to time.ParseDuration")
+	podUid          = flag.String("pod-uid", "", "Pod UID")
 )
 
 func main() {
@@ -25,18 +25,16 @@ func main() {
 		klog.Errorf("Failed to validate flags: %v", err)
 		os.Exit(1)
 	}
-
 	orchestrator, err := orchestrator.NewOrchestrator(
 		*valkeyAddress,
-		*valkeyBroadcastChannelName,
-		*valkeyPollingInterval,
+		*pollingInterval,
+		*podUid,
 	)
 	if err != nil {
 		klog.Errorf("Failed to create orchestrator: %v", err)
 		os.Exit(1)
 	}
 	defer orchestrator.Close()
-
 	ctx := context.Background()
 	orchestrator.Run(ctx)
 }
@@ -46,11 +44,11 @@ func validateFlags() error {
 	if *valkeyAddress == "" {
 		return fmt.Errorf("argument '--valkey-address' is required")
 	}
-	if *valkeyBroadcastChannelName == "" {
-		return fmt.Errorf("argument '--valkey-broadcast-channel-name' is required")
+	if *pollingInterval < 0 {
+		return fmt.Errorf("argument '--polling-interval' is required")
 	}
-	if *valkeyPollingInterval < 0 {
-		return fmt.Errorf("argument '--valkey-polling-interval' is required")
+	if *podUid == "" {
+		return fmt.Errorf("argument '--pod-uid' is required")
 	}
 	return nil
 }

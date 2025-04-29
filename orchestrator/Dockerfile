@@ -1,12 +1,23 @@
-FROM golang:1.24-alpine3.21 AS builder
-WORKDIR /app
-COPY main.go .
-COPY orchestrator ./orchestrator
-RUN go mod init orchestrator && \
-    go mod tidy && \
-    go build -o out/main
+ARG BUILDER_IMAGE=golang:1.24
+ARG BASE_IMAGE=gcr.io/distroless/static:nonroot
 
-FROM alpine:3.21
-WORKDIR /app
-COPY --from=builder /app/out/main main
-ENTRYPOINT ["/app/main"]
+# Build the orchestrator binary
+FROM --platform=${BUILDPLATFORM} ${BUILDER_IMAGE} AS builder
+
+ARG CGO_ENABLED=0  
+ARG TARGETARCH     
+
+WORKDIR /workspace
+
+# Copy the go source
+COPY . .
+
+# Build
+RUN CGO_ENABLED=${CGO_ENABLED} GOOS=linux GOARCH=${TARGETARCH} go build -o bin/orchestrator main.go
+
+FROM --platform=${BUILDPLATFORM} ${BASE_IMAGE}
+WORKDIR /
+COPY --from=builder /workspace/bin/orchestrator .
+USER 65532:65532
+
+ENTRYPOINT ["/orchestrator"]
