@@ -398,6 +398,74 @@
         }
       }
     },
+    "jobset.v1alpha2.RestartGroup": {
+      "description": "RestartGroup is the Schema for the restartgroups API",
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+          "type": "string"
+        },
+        "metadata": {
+          "default": {},
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+        },
+        "spec": {
+          "default": {},
+          "$ref": "#/definitions/jobset.v1alpha2.RestartGroupSpec"
+        },
+        "status": {
+          "default": {},
+          "$ref": "#/definitions/jobset.v1alpha2.RestartGroupStatus"
+        }
+      }
+    },
+    "jobset.v1alpha2.RestartGroupList": {
+      "description": "RestartGroupList contains a list of RestartGroup",
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "apiVersion": {
+          "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+          "type": "string"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "default": {},
+            "$ref": "#/definitions/jobset.v1alpha2.RestartGroup"
+          }
+        },
+        "kind": {
+          "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+          "type": "string"
+        },
+        "metadata": {
+          "default": {},
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"
+        }
+      }
+    },
+    "jobset.v1alpha2.RestartGroupSpec": {
+      "description": "RestartGroupSpec defines the desired state of RestartGroup",
+      "type": "object",
+      "properties": {
+        "foo": {
+          "description": "Foo is an example field of RestartGroup. Edit restartgroup_types.go to remove/update",
+          "type": "string"
+        }
+      }
+    },
+    "jobset.v1alpha2.RestartGroupStatus": {
+      "description": "RestartGroupStatus defines the observed state of RestartGroup",
+      "type": "object"
+    },
     "jobset.v1alpha2.StartupPolicy": {
       "type": "object",
       "required": [

@@ -77,6 +77,7 @@ rules:
   - jobset.x-k8s.io
   resources:
   - jobsets
+  - restartgroups
   verbs:
   - create
   - delete
@@ -89,12 +90,14 @@ rules:
   - jobset.x-k8s.io
   resources:
   - jobsets/finalizers
+  - restartgroups/finalizers
   verbs:
   - update
 - apiGroups:
   - jobset.x-k8s.io
   resources:
   - jobsets/status
+  - restartgroups/status
   verbs:
   - get
   - patch

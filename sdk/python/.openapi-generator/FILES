@@ -138,6 +138,9 @@ jobset/models/jobset_v1alpha2_job_set_status.py
 jobset/models/jobset_v1alpha2_network.py
 jobset/models/jobset_v1alpha2_replicated_job.py
 jobset/models/jobset_v1alpha2_replicated_job_status.py
+jobset/models/jobset_v1alpha2_restart_group.py
+jobset/models/jobset_v1alpha2_restart_group_list.py
+jobset/models/jobset_v1alpha2_restart_group_spec.py
 jobset/models/jobset_v1alpha2_startup_policy.py
 jobset/models/jobset_v1alpha2_success_policy.py
 jobset/py.typed
@@ -275,6 +278,9 @@ test/test_jobset_v1alpha2_job_set_status.py
 test/test_jobset_v1alpha2_network.py
 test/test_jobset_v1alpha2_replicated_job.py
 test/test_jobset_v1alpha2_replicated_job_status.py
+test/test_jobset_v1alpha2_restart_group.py
+test/test_jobset_v1alpha2_restart_group_list.py
+test/test_jobset_v1alpha2_restart_group_spec.py
 test/test_jobset_v1alpha2_startup_policy.py
 test/test_jobset_v1alpha2_success_policy.py
 tox.ini

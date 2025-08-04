@@ -36,6 +36,10 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.Network":             schema_jobset_api_jobset_v1alpha2_Network(ref),
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.ReplicatedJob":       schema_jobset_api_jobset_v1alpha2_ReplicatedJob(ref),
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.ReplicatedJobStatus": schema_jobset_api_jobset_v1alpha2_ReplicatedJobStatus(ref),
+		"sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroup":        schema_jobset_api_jobset_v1alpha2_RestartGroup(ref),
+		"sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupList":    schema_jobset_api_jobset_v1alpha2_RestartGroupList(ref),
+		"sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupSpec":    schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref),
+		"sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupStatus":  schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref),
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.StartupPolicy":       schema_jobset_api_jobset_v1alpha2_StartupPolicy(ref),
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.SuccessPolicy":       schema_jobset_api_jobset_v1alpha2_SuccessPolicy(ref),
 	}
@@ -686,6 +690,133 @@ func schema_jobset_api_jobset_v1alpha2_ReplicatedJobStatus(ref common.ReferenceC
 					},
 				},
 				Required: []string{"name", "ready", "succeeded", "failed", "active", "suspended"},
+			},
+		},
+	}
+}
+
+func schema_jobset_api_jobset_v1alpha2_RestartGroup(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RestartGroup is the Schema for the restartgroups API",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupSpec"),
+						},
+					},
+					"status": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupStatus"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta", "sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupSpec", "sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupStatus"},
+	}
+}
+
+func schema_jobset_api_jobset_v1alpha2_RestartGroupList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RestartGroupList contains a list of RestartGroup",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroup"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta", "sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroup"},
+	}
+}
+
+func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RestartGroupSpec defines the desired state of RestartGroup",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"foo": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Foo is an example field of RestartGroup. Edit restartgroup_types.go to remove/update",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "RestartGroupStatus defines the observed state of RestartGroup",
+				Type:        []string{"object"},
 			},
 		},
 	}

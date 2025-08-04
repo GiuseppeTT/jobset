@@ -232,6 +232,13 @@ func setupControllers(mgr ctrl.Manager, certsReady chan struct{}) {
 		os.Exit(1)
 	}
 
+	// Set up RestartGroup controller.
+	restartGroupController := controllers.NewJobSetReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("jobset"))
+	if err := restartGroupController.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "RestartGroup")
+		os.Exit(1)
+	}
+
 	// Set up JobSet validating/defaulting webhook.
 	jobSetWebHook, err := webhooks.NewJobSetWebhook(mgr.GetClient())
 	if err != nil {
