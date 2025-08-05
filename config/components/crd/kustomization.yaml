@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/jobset.x-k8s.io_jobsets.yaml
+- bases/jobset.x-k8s.io_restartgroups.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -80,8 +80,23 @@ class TestJobsetV1alpha2RestartGroupList(unittest.TestCase):
                             self_link = '', 
                             uid = '', ), 
                         spec = jobset.models.jobset_v1alpha2_restart_group_spec.JobsetV1alpha2RestartGroupSpec(
-                            foo = '', ), 
-                        status = jobset.models.status.status(), )
+                            worker_container_name = '', 
+                            worker_count = 56, 
+                            worker_pod_selector = jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector(
+                                match_expressions = [
+                                    jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector_requirement.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorRequirement(
+                                        key = '', 
+                                        operator = '', 
+                                        values = [
+                                            ''
+                                            ], )
+                                    ], 
+                                match_labels = {
+                                    'key' : ''
+                                    }, ), ), 
+                        status = jobset.models.jobset_v1alpha2_restart_group_status.JobsetV1alpha2RestartGroupStatus(
+                            restart_finished_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), 
+                            restart_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), ), )
                     ],
                 kind = '',
                 metadata = jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/list_meta.io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta(
@@ -136,8 +151,23 @@ class TestJobsetV1alpha2RestartGroupList(unittest.TestCase):
                             self_link = '', 
                             uid = '', ), 
                         spec = jobset.models.jobset_v1alpha2_restart_group_spec.JobsetV1alpha2RestartGroupSpec(
-                            foo = '', ), 
-                        status = jobset.models.status.status(), )
+                            worker_container_name = '', 
+                            worker_count = 56, 
+                            worker_pod_selector = jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector(
+                                match_expressions = [
+                                    jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector_requirement.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorRequirement(
+                                        key = '', 
+                                        operator = '', 
+                                        values = [
+                                            ''
+                                            ], )
+                                    ], 
+                                match_labels = {
+                                    'key' : ''
+                                    }, ), ), 
+                        status = jobset.models.jobset_v1alpha2_restart_group_status.JobsetV1alpha2RestartGroupStatus(
+                            restart_finished_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), 
+                            restart_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), ), )
                     ],
         )
         """

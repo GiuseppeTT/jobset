@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing import Any, ClassVar, Dict, List, Optional
 from jobset.models.io_k8s_apimachinery_pkg_apis_meta_v1_object_meta import IoK8sApimachineryPkgApisMetaV1ObjectMeta
 from jobset.models.jobset_v1alpha2_restart_group_spec import JobsetV1alpha2RestartGroupSpec
+from jobset.models.jobset_v1alpha2_restart_group_status import JobsetV1alpha2RestartGroupStatus
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -32,7 +33,7 @@ class JobsetV1alpha2RestartGroup(BaseModel):
     kind: Optional[StrictStr] = Field(default=None, description="Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds")
     metadata: Optional[IoK8sApimachineryPkgApisMetaV1ObjectMeta] = None
     spec: Optional[JobsetV1alpha2RestartGroupSpec] = None
-    status: Optional[Dict[str, Any]] = Field(default=None, description="RestartGroupStatus defines the observed state of RestartGroup")
+    status: Optional[JobsetV1alpha2RestartGroupStatus] = None
     __properties: ClassVar[List[str]] = ["apiVersion", "kind", "metadata", "spec", "status"]
 
     model_config = ConfigDict(
@@ -80,6 +81,9 @@ class JobsetV1alpha2RestartGroup(BaseModel):
         # override the default output from pydantic by calling `to_dict()` of spec
         if self.spec:
             _dict['spec'] = self.spec.to_dict()
+        # override the default output from pydantic by calling `to_dict()` of status
+        if self.status:
+            _dict['status'] = self.status.to_dict()
         return _dict
 
     @classmethod
@@ -96,7 +100,7 @@ class JobsetV1alpha2RestartGroup(BaseModel):
             "kind": obj.get("kind"),
             "metadata": IoK8sApimachineryPkgApisMetaV1ObjectMeta.from_dict(obj["metadata"]) if obj.get("metadata") is not None else None,
             "spec": JobsetV1alpha2RestartGroupSpec.from_dict(obj["spec"]) if obj.get("spec") is not None else None,
-            "status": obj.get("status")
+            "status": JobsetV1alpha2RestartGroupStatus.from_dict(obj["status"]) if obj.get("status") is not None else None
         })
         return _obj
 

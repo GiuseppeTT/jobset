@@ -57,6 +57,7 @@ var (
 )
 
 func init() {
+
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(jobset.AddToScheme(scheme))
@@ -233,7 +234,7 @@ func setupControllers(mgr ctrl.Manager, certsReady chan struct{}) {
 	}
 
 	// Set up RestartGroup controller.
-	restartGroupController := controllers.NewJobSetReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("jobset"))
+	restartGroupController := controllers.NewRestartGroupReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("restartgroup"))
 	if err := restartGroupController.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RestartGroup")
 		os.Exit(1)

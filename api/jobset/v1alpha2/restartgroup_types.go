@@ -17,22 +17,30 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // RestartGroupSpec defines the desired state of RestartGroup
 type RestartGroupSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// WorkerPodSelector is a label selector for the pods that are part of this restart group.
+	//+kubebuilder:validation:Required
+	WorkerPodSelector metav1.LabelSelector `json:"workerPodSelector"`
 
-	// Foo is an example field of RestartGroup. Edit restartgroup_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// WorkerContainerName is the name of the container to restart in the selected pods.
+	//+kubebuilder:validation:Required
+	WorkerContainerName string `json:"workerContainerName"`
+
+	// WorkerCount is the number of worker containers in the restart group.
+	//+kubebuilder:validation:Required
+	WorkerCount int32 `json:"workerCount"`
 }
 
 // RestartGroupStatus defines the observed state of RestartGroup
 type RestartGroupStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// RestartStartedAt is the time when the restart operation was initiated.
+	// +optional
+	RestartStartedAt *metav1.Time `json:"restartStartedAt,omitempty"`
+
+	// RestartFinishedAt is the time when the restart operation completed.
+	// +optional
+	RestartFinishedAt *metav1.Time `json:"restartFinishedAt,omitempty"`
 }
 
 //+kubebuilder:object:root=true

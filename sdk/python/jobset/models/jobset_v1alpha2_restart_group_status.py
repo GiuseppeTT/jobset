@@ -17,20 +17,19 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
-from typing import Any, ClassVar, Dict, List
-from jobset.models.io_k8s_apimachinery_pkg_apis_meta_v1_label_selector import IoK8sApimachineryPkgApisMetaV1LabelSelector
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, ClassVar, Dict, List, Optional
 from typing import Optional, Set
 from typing_extensions import Self
 
-class JobsetV1alpha2RestartGroupSpec(BaseModel):
+class JobsetV1alpha2RestartGroupStatus(BaseModel):
     """
-    RestartGroupSpec defines the desired state of RestartGroup
+    RestartGroupStatus defines the observed state of RestartGroup
     """ # noqa: E501
-    worker_container_name: StrictStr = Field(description="WorkerContainerName is the name of the container to restart in the selected pods.", alias="workerContainerName")
-    worker_count: StrictInt = Field(description="WorkerCount is the number of worker containers in the restart group.", alias="workerCount")
-    worker_pod_selector: IoK8sApimachineryPkgApisMetaV1LabelSelector = Field(alias="workerPodSelector")
-    __properties: ClassVar[List[str]] = ["workerContainerName", "workerCount", "workerPodSelector"]
+    restart_finished_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="restartFinishedAt")
+    restart_started_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="restartStartedAt")
+    __properties: ClassVar[List[str]] = ["restartFinishedAt", "restartStartedAt"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -50,7 +49,7 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of JobsetV1alpha2RestartGroupSpec from a JSON string"""
+        """Create an instance of JobsetV1alpha2RestartGroupStatus from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -71,14 +70,11 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of worker_pod_selector
-        if self.worker_pod_selector:
-            _dict['workerPodSelector'] = self.worker_pod_selector.to_dict()
         return _dict
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of JobsetV1alpha2RestartGroupSpec from a dict"""
+        """Create an instance of JobsetV1alpha2RestartGroupStatus from a dict"""
         if obj is None:
             return None
 
@@ -86,9 +82,8 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "workerContainerName": obj.get("workerContainerName") if obj.get("workerContainerName") is not None else '',
-            "workerCount": obj.get("workerCount") if obj.get("workerCount") is not None else 0,
-            "workerPodSelector": IoK8sApimachineryPkgApisMetaV1LabelSelector.from_dict(obj["workerPodSelector"]) if obj.get("workerPodSelector") is not None else None
+            "restartFinishedAt": obj.get("restartFinishedAt"),
+            "restartStartedAt": obj.get("restartStartedAt")
         })
         return _obj
 

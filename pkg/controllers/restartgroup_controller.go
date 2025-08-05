@@ -17,6 +17,7 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -28,6 +29,11 @@ import (
 type RestartGroupReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	Record record.EventRecorder
+}
+
+func NewRestartGroupReconciler(client client.Client, scheme *runtime.Scheme, record record.EventRecorder) *RestartGroupReconciler {
+	return &RestartGroupReconciler{Client: client, Scheme: scheme, Record: record}
 }
 
 //+kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups,verbs=get;list;watch;create;update;patch;delete

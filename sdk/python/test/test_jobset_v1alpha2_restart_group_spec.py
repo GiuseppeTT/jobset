@@ -35,10 +35,37 @@ class TestJobsetV1alpha2RestartGroupSpec(unittest.TestCase):
         model = JobsetV1alpha2RestartGroupSpec()
         if include_optional:
             return JobsetV1alpha2RestartGroupSpec(
-                foo = ''
+                worker_container_name = '',
+                worker_count = 56,
+                worker_pod_selector = jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector(
+                    match_expressions = [
+                        jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector_requirement.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorRequirement(
+                            key = '', 
+                            operator = '', 
+                            values = [
+                                ''
+                                ], )
+                        ], 
+                    match_labels = {
+                        'key' : ''
+                        }, )
             )
         else:
             return JobsetV1alpha2RestartGroupSpec(
+                worker_container_name = '',
+                worker_count = 56,
+                worker_pod_selector = jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector(
+                    match_expressions = [
+                        jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/label_selector_requirement.io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorRequirement(
+                            key = '', 
+                            operator = '', 
+                            values = [
+                                ''
+                                ], )
+                        ], 
+                    match_labels = {
+                        'key' : ''
+                        }, ),
         )
         """
 

@@ -798,16 +798,35 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 				Description: "RestartGroupSpec defines the desired state of RestartGroup",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"foo": {
+					"workerPodSelector": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Foo is an example field of RestartGroup. Edit restartgroup_types.go to remove/update",
+							Description: "WorkerPodSelector is a label selector for the pods that are part of this restart group.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"),
+						},
+					},
+					"workerContainerName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "WorkerContainerName is the name of the container to restart in the selected pods.",
+							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
+					"workerCount": {
+						SchemaProps: spec.SchemaProps{
+							Description: "WorkerCount is the number of worker containers in the restart group.",
+							Default:     0,
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
 				},
+				Required: []string{"workerPodSelector", "workerContainerName", "workerCount"},
 			},
 		},
+		Dependencies: []string{
+			"k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"},
 	}
 }
 
@@ -817,8 +836,24 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref common.ReferenceCa
 			SchemaProps: spec.SchemaProps{
 				Description: "RestartGroupStatus defines the observed state of RestartGroup",
 				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"restartStartedAt": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RestartStartedAt is the time when the restart operation was initiated.",
+							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
+					"restartFinishedAt": {
+						SchemaProps: spec.SchemaProps{
+							Description: "RestartFinishedAt is the time when the restart operation completed.",
+							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
+				},
 			},
 		},
+		Dependencies: []string{
+			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
 	}
 }
 

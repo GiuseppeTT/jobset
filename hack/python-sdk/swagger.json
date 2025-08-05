@@ -455,16 +455,43 @@
     "jobset.v1alpha2.RestartGroupSpec": {
       "description": "RestartGroupSpec defines the desired state of RestartGroup",
       "type": "object",
+      "required": [
+        "workerPodSelector",
+        "workerContainerName",
+        "workerCount"
+      ],
       "properties": {
-        "foo": {
-          "description": "Foo is an example field of RestartGroup. Edit restartgroup_types.go to remove/update",
-          "type": "string"
+        "workerContainerName": {
+          "description": "WorkerContainerName is the name of the container to restart in the selected pods.",
+          "type": "string",
+          "default": ""
+        },
+        "workerCount": {
+          "description": "WorkerCount is the number of worker containers in the restart group.",
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "workerPodSelector": {
+          "description": "WorkerPodSelector is a label selector for the pods that are part of this restart group.",
+          "default": {},
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector"
         }
       }
     },
     "jobset.v1alpha2.RestartGroupStatus": {
       "description": "RestartGroupStatus defines the observed state of RestartGroup",
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "restartFinishedAt": {
+          "description": "RestartFinishedAt is the time when the restart operation completed.",
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
+        },
+        "restartStartedAt": {
+          "description": "RestartStartedAt is the time when the restart operation was initiated.",
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
+        }
+      }
     },
     "jobset.v1alpha2.StartupPolicy": {
       "type": "object",
