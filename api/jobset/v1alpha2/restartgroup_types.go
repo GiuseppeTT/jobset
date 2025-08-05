@@ -36,11 +36,11 @@ type RestartGroupSpec struct {
 type RestartGroupStatus struct {
 	// RestartStartedAt is the time when the restart operation was initiated.
 	// +optional
-	RestartStartedAt *metav1.Time `json:"restartStartedAt,omitempty"`
+	RestartStartedAt *metav1.Time `json:"restartStartedAt"`
 
 	// RestartFinishedAt is the time when the restart operation completed.
 	// +optional
-	RestartFinishedAt *metav1.Time `json:"restartFinishedAt,omitempty"`
+	RestartFinishedAt *metav1.Time `json:"restartFinishedAt"`
 }
 
 //+kubebuilder:object:root=true
