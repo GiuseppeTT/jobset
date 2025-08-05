@@ -13,5 +13,5 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 images:
 - name: controller
-  newName: us-west4-docker.pkg.dev/giuseppett-gke-dev/inplace-ar/jobset
-  newTag: 2025-08-04-16-49-54
+  newName: us-central1-docker.pkg.dev/k8s-staging-images/jobset/jobset
+  newTag: main
