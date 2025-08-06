@@ -191,9 +191,9 @@ func updateState(restartGroup *jobset.RestartGroup, workerStates map[string]Work
 func updateStateWhenRunning(restartGroup *jobset.RestartGroup, workerStates map[string]WorkerState) error {
 	var minimumFinishedAt *metav1.Time
 	for _, workerState := range workerStates {
-		// Check if worker terminated after last restart end
-		if workerState.FinishedAt != nil && workerState.FinishedAt.After(restartGroup.Status.RestartFinishedAt.Time) {
-			// Check if worker was the first to terminate
+		// Check if worker failed after last restart end
+		if workerState.FinishedAt != nil && workerState.FinishedAt.After(restartGroup.Status.RestartFinishedAt.Time) && workerState.ExitCode != nil && *workerState.ExitCode != 0 {
+			// Check if worker was the first to fail
 			if minimumFinishedAt == nil || workerState.FinishedAt.Before(minimumFinishedAt) {
 				minimumFinishedAt = workerState.FinishedAt
 			}
