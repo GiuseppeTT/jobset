@@ -16,6 +16,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -43,19 +44,40 @@ func NewRestartGroupReconciler(client client.Client, scheme *runtime.Scheme, rec
 	return &RestartGroupReconciler{Client: client, Scheme: scheme, Record: record}
 }
 
-//+kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups/finalizers,verbs=update
+// SetupWithManager sets up the controller with the Manager.
+func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&jobset.RestartGroup{}).
+		Owns(&corev1.ConfigMap{}).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+				labels := obj.GetLabels()
+				restartGroupName, ok := labels["jobset.sigs.k8s.io/restart-group-name"] // TODO: Constant
+				if !ok {
+					return []reconcile.Request{}
+				}
+				restartGroupNamespace := obj.GetNamespace()
+				return []reconcile.Request{
+					{
+						NamespacedName: types.NamespacedName{
+							Name:      restartGroupName,
+							Namespace: restartGroupNamespace,
+						},
+					},
+				}
+			}),
+		).
+		Complete(r)
+}
+
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the RestartGroup object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.14.4/pkg/reconcile
 func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	// Get RestartGroup from apiserver
 	var restartGroup jobset.RestartGroup
@@ -101,35 +123,11 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Broadcast if necessary
-	// TODO
+	if err := r.updateBroadcastConfigMap(ctx, &restartGroup); err != nil {
+		log.Error(err, "broadcasting restart signal")
+	}
 
 	return ctrl.Result{}, nil
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&jobset.RestartGroup{}).
-		Watches(
-			&corev1.Pod{},
-			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
-				labels := obj.GetLabels()
-				restartGroupName, ok := labels["jobset.sigs.k8s.io/restart-group-name"]
-				if !ok {
-					return []reconcile.Request{}
-				}
-				restartGroupNamespace := obj.GetNamespace()
-				return []reconcile.Request{
-					{
-						NamespacedName: types.NamespacedName{
-							Name:      restartGroupName,
-							Namespace: restartGroupNamespace,
-						},
-					},
-				}
-			}),
-		).
-		Complete(r)
 }
 
 type WorkerState struct {
@@ -240,6 +238,60 @@ func updateStateWhenRestarting(restartGroup *jobset.RestartGroup, workerStates m
 func (r *RestartGroupReconciler) updateRestartGroupStatus(ctx context.Context, restartGroup *jobset.RestartGroup) error {
 	if err := r.Status().Update(ctx, restartGroup); err != nil {
 		return err
+	}
+	return nil
+}
+
+// TODO: Add jobset-name label to it
+// TODO: Add restart-group-name label to it
+func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, restartGroup *jobset.RestartGroup) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	// No need to create / update configmap if restart start is nil / zero
+	if restartGroup.Status.RestartStartedAt == nil || restartGroup.Status.RestartStartedAt.IsZero() {
+		return nil
+	}
+	desiredData := map[string]string{
+		"RestartStartedAt": restartGroup.Status.RestartStartedAt.Format(time.RFC3339Nano),
+	}
+
+	// Get configMap
+	cmName := restartGroup.Name + "-broadcast"
+	cmKey := types.NamespacedName{Name: cmName, Namespace: restartGroup.Namespace}
+	var cm corev1.ConfigMap
+	err := r.Get(ctx, cmKey, &cm)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("getting configmap: %w", err)
+	}
+
+	// Create configMap if it doesn't exist
+	if err != nil && apierrors.IsNotFound(err) {
+		cmToCreate := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cmName,
+				Namespace: restartGroup.Namespace,
+			},
+			Data: desiredData,
+		}
+		if err := ctrl.SetControllerReference(restartGroup, cmToCreate, r.Scheme); err != nil {
+			return fmt.Errorf("setting controller reference: %w", err)
+		}
+		log.V(2).Info("Creating broadcast configmap", "configmap", klog.KObj(cmToCreate))
+		if err := r.Create(ctx, cmToCreate); err != nil {
+			return fmt.Errorf("creating configmap: %w", err)
+		}
+	}
+
+	// Skip update if nothing changed
+	if currentRestartStartedAt, ok := cm.Data["RestartStartedAt"]; ok && currentRestartStartedAt == desiredData["RestartStartedAt"] {
+		return nil
+	}
+
+	// Update configMap
+	cm.Data = desiredData
+	log.V(2).Info("Updating broadcast configmap", "configmap", klog.KObj(&cm))
+	if err := r.Update(ctx, &cm); err != nil {
+		return fmt.Errorf("updating configmap: %w", err)
 	}
 	return nil
 }

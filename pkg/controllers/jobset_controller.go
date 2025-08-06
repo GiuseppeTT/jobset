@@ -278,6 +278,7 @@ func (r *JobSetReconciler) updateJobSetStatus(ctx context.Context, js *jobset.Jo
 }
 
 // TODO: Redo based on `createHeadlessSvcIfNecessary`
+// TODO: Add jobset-name label to it
 func (r *JobSetReconciler) createRestartGroupIfNecessary(ctx context.Context, js *jobset.JobSet) error {
 	log := ctrl.LoggerFrom(ctx)
 
