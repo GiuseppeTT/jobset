@@ -197,6 +197,10 @@ func main() {
 		setupLog.Error(err, "unable to setup pod reconciler indexes")
 		os.Exit(1)
 	}
+	if err := controllers.SetupRestartGroupIndexes(ctx, mgr.GetFieldIndexer()); err != nil {
+		setupLog.Error(err, "unable to setup restartgroiup reconciler indexes")
+		os.Exit(1)
+	}
 
 	// Cert won't be ready until manager starts, so start a goroutine here which
 	// will block until the cert is ready before setting up the controllers.

@@ -71,6 +71,40 @@ func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// TODO: Use constants
+func SetupRestartGroupIndexes(ctx context.Context, indexer client.FieldIndexer) error {
+	if err := indexer.IndexField(ctx, &corev1.Pod{}, "podRestartGroupName", func(obj client.Object) []string {
+		pod := obj.(*corev1.Pod)
+		restartGroupName, ok := pod.Labels["jobset.sigs.k8s.io/restart-group-name"]
+		if !ok {
+			return nil
+		}
+		return []string{restartGroupName}
+	}); err != nil {
+		return err
+	}
+
+	if err := indexer.IndexField(ctx, &corev1.ConfigMap{}, ".metadata.controller", func(obj client.Object) []string {
+		// grab the configMap object, extract the owner...
+		configMap := obj.(*corev1.ConfigMap)
+		owner := metav1.GetControllerOf(configMap)
+		if owner == nil {
+			return nil
+		}
+		// ...make sure it's a RestartGroup...
+		if owner.APIVersion != apiGVStr || owner.Kind != "RestartGroup" {
+			return nil
+		}
+
+		// ...and if so, return it
+		return []string{owner.Name}
+	}); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups/finalizers,verbs=update
@@ -93,13 +127,8 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Get all pods managed by the RestartGroup
 	// TODO: Use index to speed up listing
 	// TODO: Turn into function
-	selector, err := metav1.LabelSelectorAsSelector(&restartGroup.Spec.WorkerPodSelector)
-	if err != nil {
-		log.Error(err, "invalid worker pod selector")
-		return ctrl.Result{}, err
-	}
 	var managedPods corev1.PodList
-	if err := r.List(ctx, &managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingLabelsSelector{Selector: selector}); err != nil {
+	if err := r.List(ctx, &managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{"podRestartGroupName": restartGroup.Name}); err != nil { // TODO: Use constants
 		log.Error(err, "listing pods")
 		return ctrl.Result{}, err
 	}
@@ -244,6 +273,7 @@ func (r *RestartGroupReconciler) updateRestartGroupStatus(ctx context.Context, r
 
 // TODO: Add jobset-name label to it
 // TODO: Add restart-group-name label to it
+// TODO: Use constants
 func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, restartGroup *jobset.RestartGroup) error {
 	log := ctrl.LoggerFrom(ctx)
 
@@ -256,41 +286,44 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 	}
 
 	// Get configMap
-	cmName := restartGroup.Name + "-broadcast"
-	cmKey := types.NamespacedName{Name: cmName, Namespace: restartGroup.Namespace}
-	var cm corev1.ConfigMap
-	err := r.Get(ctx, cmKey, &cm)
-	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("getting configmap: %w", err)
+	var childConfigMaps corev1.ConfigMapList
+	if err := r.List(ctx, &childConfigMaps, client.InNamespace(restartGroup.Namespace), client.MatchingFields{".metadata.controller": restartGroup.Name}); err != nil {
+		return err
+	}
+	if len(childConfigMaps.Items) > 1 {
+		return fmt.Errorf("expected 0 or 1 ConfigMap, but found %d", len(childConfigMaps.Items))
 	}
 
 	// Create configMap if it doesn't exist
-	if err != nil && apierrors.IsNotFound(err) {
-		cmToCreate := &corev1.ConfigMap{
+	if len(childConfigMaps.Items) == 0 {
+		configMapName := restartGroup.Name + "-broadcast"
+		newConfigMap := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      cmName,
+				Name:      configMapName,
 				Namespace: restartGroup.Namespace,
 			},
 			Data: desiredData,
 		}
-		if err := ctrl.SetControllerReference(restartGroup, cmToCreate, r.Scheme); err != nil {
+		if err := ctrl.SetControllerReference(restartGroup, newConfigMap, r.Scheme); err != nil {
 			return fmt.Errorf("setting controller reference: %w", err)
 		}
-		log.V(2).Info("Creating broadcast configmap", "configmap", klog.KObj(cmToCreate))
-		if err := r.Create(ctx, cmToCreate); err != nil {
+		log.V(2).Info("Creating broadcast configmap", "configmap", klog.KObj(newConfigMap))
+		if err := r.Create(ctx, newConfigMap); err != nil {
 			return fmt.Errorf("creating configmap: %w", err)
 		}
 	}
 
+	childConfigMap := childConfigMaps.Items[0]
+
 	// Skip update if nothing changed
-	if currentRestartStartedAt, ok := cm.Data["RestartStartedAt"]; ok && currentRestartStartedAt == desiredData["RestartStartedAt"] {
+	if currentRestartStartedAt, ok := childConfigMap.Data["RestartStartedAt"]; ok && currentRestartStartedAt == desiredData["RestartStartedAt"] {
 		return nil
 	}
 
 	// Update configMap
-	cm.Data = desiredData
-	log.V(2).Info("Updating broadcast configmap", "configmap", klog.KObj(&cm))
-	if err := r.Update(ctx, &cm); err != nil {
+	childConfigMap.Data = desiredData
+	log.V(2).Info("Updating broadcast configmap", "configmap", klog.KObj(&childConfigMap))
+	if err := r.Update(ctx, &childConfigMap); err != nil {
 		return fmt.Errorf("updating configmap: %w", err)
 	}
 	return nil
