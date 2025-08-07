@@ -17,28 +17,34 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	// TODO: Add description
+	RestartGroupNameKey = "jobset.sigs.k8s.io/restart-group-name"
+	// TODO: Add description
+	TargetContainerNameKey = "jobset.sigs.k8s.io/target-container-name"
+	// TODO: Add description
+	RestartStartedAtDataKey = "RestartStartedAt"
+)
+
 // RestartGroupSpec defines the desired state of RestartGroup
 type RestartGroupSpec struct {
-	// WorkerPodSelector is a label selector for the pods that are part of this restart group.
+	// Container is the name of the container to be watched in managed Pods.
+	// If any of the watched containers fails, a group restart is performed.
 	//+kubebuilder:validation:Required
-	WorkerPodSelector metav1.LabelSelector `json:"workerPodSelector"`
+	Container string `json:"container"`
 
-	// WorkerContainerName is the name of the container to restart in the selected pods.
+	// Size is the number of watched containers in the restart group.
 	//+kubebuilder:validation:Required
-	WorkerContainerName string `json:"workerContainerName"`
-
-	// WorkerCount is the number of worker containers in the restart group.
-	//+kubebuilder:validation:Required
-	WorkerCount int32 `json:"workerCount"`
+	Size int32 `json:"size"`
 }
 
 // RestartGroupStatus defines the observed state of RestartGroup
 type RestartGroupStatus struct {
-	// RestartStartedAt is the time when the restart operation was initiated.
+	// RestartStartedAt is the time when the group estart started.
 	// +optional
 	RestartStartedAt *metav1.Time `json:"restartStartedAt"`
 
-	// RestartFinishedAt is the time when the restart operation completed.
+	// RestartFinishedAt is the time when the group restart finished.
 	// +optional
 	RestartFinishedAt *metav1.Time `json:"restartFinishedAt"`
 }

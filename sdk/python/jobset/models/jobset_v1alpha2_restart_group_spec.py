@@ -19,7 +19,6 @@ import json
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from typing import Any, ClassVar, Dict, List
-from jobset.models.io_k8s_apimachinery_pkg_apis_meta_v1_label_selector import IoK8sApimachineryPkgApisMetaV1LabelSelector
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,10 +26,9 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
     """
     RestartGroupSpec defines the desired state of RestartGroup
     """ # noqa: E501
-    worker_container_name: StrictStr = Field(description="WorkerContainerName is the name of the container to restart in the selected pods.", alias="workerContainerName")
-    worker_count: StrictInt = Field(description="WorkerCount is the number of worker containers in the restart group.", alias="workerCount")
-    worker_pod_selector: IoK8sApimachineryPkgApisMetaV1LabelSelector = Field(alias="workerPodSelector")
-    __properties: ClassVar[List[str]] = ["workerContainerName", "workerCount", "workerPodSelector"]
+    container: StrictStr = Field(description="Container is the name of the container to be watched in managed Pods. If any of the watched containers fails, a group restart is performed.")
+    size: StrictInt = Field(description="Size is the number of watched containers in the restart group.")
+    __properties: ClassVar[List[str]] = ["container", "size"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -71,9 +69,6 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
-        # override the default output from pydantic by calling `to_dict()` of worker_pod_selector
-        if self.worker_pod_selector:
-            _dict['workerPodSelector'] = self.worker_pod_selector.to_dict()
         return _dict
 
     @classmethod
@@ -86,9 +81,8 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "workerContainerName": obj.get("workerContainerName") if obj.get("workerContainerName") is not None else '',
-            "workerCount": obj.get("workerCount") if obj.get("workerCount") is not None else 0,
-            "workerPodSelector": IoK8sApimachineryPkgApisMetaV1LabelSelector.from_dict(obj["workerPodSelector"]) if obj.get("workerPodSelector") is not None else None
+            "container": obj.get("container") if obj.get("container") is not None else '',
+            "size": obj.get("size") if obj.get("size") is not None else 0
         })
         return _obj
 

@@ -33,6 +33,13 @@ import (
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 )
 
+const (
+	RestartGroupKind                 = "RestartGroup"
+	PodRestartGroupNameKey           = "podRestartGroupName"
+	ConfigMapOwnerKey                = ".metadata.controller"
+	RestartGroupCreationFailedReason = "RestartGroupCreationFailed"
+)
+
 // RestartGroupReconciler reconciles a RestartGroup object
 type RestartGroupReconciler struct {
 	client.Client
@@ -53,7 +60,7 @@ func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
 				labels := obj.GetLabels()
-				restartGroupName, ok := labels["jobset.sigs.k8s.io/restart-group-name"] // TODO: Constant
+				restartGroupName, ok := labels[jobset.RestartGroupNameKey]
 				if !ok {
 					return []reconcile.Request{}
 				}
@@ -71,11 +78,10 @@ func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// TODO: Use constants
 func SetupRestartGroupIndexes(ctx context.Context, indexer client.FieldIndexer) error {
-	if err := indexer.IndexField(ctx, &corev1.Pod{}, "podRestartGroupName", func(obj client.Object) []string {
+	if err := indexer.IndexField(ctx, &corev1.Pod{}, PodRestartGroupNameKey, func(obj client.Object) []string {
 		pod := obj.(*corev1.Pod)
-		restartGroupName, ok := pod.Labels["jobset.sigs.k8s.io/restart-group-name"]
+		restartGroupName, ok := pod.Labels[jobset.RestartGroupNameKey]
 		if !ok {
 			return nil
 		}
@@ -84,19 +90,15 @@ func SetupRestartGroupIndexes(ctx context.Context, indexer client.FieldIndexer) 
 		return err
 	}
 
-	if err := indexer.IndexField(ctx, &corev1.ConfigMap{}, ".metadata.controller", func(obj client.Object) []string {
-		// grab the configMap object, extract the owner...
+	if err := indexer.IndexField(ctx, &corev1.ConfigMap{}, ConfigMapOwnerKey, func(obj client.Object) []string {
 		configMap := obj.(*corev1.ConfigMap)
 		owner := metav1.GetControllerOf(configMap)
 		if owner == nil {
 			return nil
 		}
-		// ...make sure it's a RestartGroup...
-		if owner.APIVersion != apiGVStr || owner.Kind != "RestartGroup" {
+		if owner.APIVersion != apiGVStr || owner.Kind != RestartGroupKind {
 			return nil
 		}
-
-		// ...and if so, return it
 		return []string{owner.Name}
 	}); err != nil {
 		return err
@@ -110,6 +112,7 @@ func SetupRestartGroupIndexes(ctx context.Context, indexer client.FieldIndexer) 
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=restartgroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
+// TODO: Add events
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -122,31 +125,27 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	log := ctrl.LoggerFrom(ctx).WithValues("restartgroup", klog.KObj(&restartGroup))
 	ctx = ctrl.LoggerInto(ctx, log)
-	log.V(2).Info("Reconciling RestartGroup") // TODO: Set to V(4)
+	log.V(4).Info("Reconciling RestartGroup")
 
 	// Get all pods managed by the RestartGroup
-	// TODO: Use index to speed up listing
 	// TODO: Turn into function
 	var managedPods corev1.PodList
-	if err := r.List(ctx, &managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{"podRestartGroupName": restartGroup.Name}); err != nil { // TODO: Use constants
+	if err := r.List(ctx, &managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{PodRestartGroupNameKey: restartGroup.Name}); err != nil {
 		log.Error(err, "listing pods")
 		return ctrl.Result{}, err
 	}
 	log.V(2).Info("Found pods", "count", len(managedPods.Items))
 
-	// Get worker states
-	// TODO: Add logging
-	workerStates := getWorkerStates(restartGroup, managedPods)
+	// Get container states
+	containerStates := getContainerStates(restartGroup, managedPods)
 
 	// Update restart state
-	// TODO: Add logging
-	if err := updateState(&restartGroup, workerStates); err != nil {
+	if err := updateState(&restartGroup, containerStates); err != nil {
 		log.Error(err, "updating restart group")
 		return ctrl.Result{}, err
 	}
 
 	// Update RestartGroup status
-	// TODO: Add logging
 	if err := r.updateRestartGroupStatus(ctx, &restartGroup); apierrors.IsConflict(err) {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -159,72 +158,72 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{}, nil
 }
 
-type WorkerState struct {
+type ContainerState struct {
 	StartedAt  *metav1.Time
 	FinishedAt *metav1.Time
 	ExitCode   *int32
 }
 
-func NewWorkerStateFromContainerState(containerState corev1.ContainerState) WorkerState {
+func NewContainerState(containerState corev1.ContainerState) ContainerState {
 	if containerState.Waiting != nil {
-		return WorkerState{
+		return ContainerState{
 			StartedAt:  nil,
 			FinishedAt: nil,
 			ExitCode:   nil,
 		}
 	} else if containerState.Running != nil {
-		return WorkerState{
+		return ContainerState{
 			StartedAt:  &containerState.Running.StartedAt,
 			FinishedAt: nil,
 			ExitCode:   nil,
 		}
 	} else if containerState.Terminated != nil {
-		return WorkerState{
+		return ContainerState{
 			StartedAt:  &containerState.Terminated.StartedAt,
 			FinishedAt: &containerState.Terminated.FinishedAt,
 			ExitCode:   &containerState.Terminated.ExitCode,
 		}
 	}
-	return WorkerState{
+	return ContainerState{
 		StartedAt:  nil,
 		FinishedAt: nil,
 		ExitCode:   nil,
 	}
 }
 
-func getWorkerStates(restartGroup jobset.RestartGroup, managedPods corev1.PodList) map[string]WorkerState {
-	workerStates := make(map[string]WorkerState)
+func getContainerStates(restartGroup jobset.RestartGroup, managedPods corev1.PodList) map[string]ContainerState {
+	containerStates := make(map[string]ContainerState)
 	for _, pod := range managedPods.Items {
-		workerId := pod.GenerateName
+		id := pod.GenerateName
 		for _, containerStatus := range pod.Status.ContainerStatuses {
-			if containerStatus.Name == restartGroup.Spec.WorkerContainerName {
-				workerState := NewWorkerStateFromContainerState(containerStatus.State)
-				workerStates[workerId] = workerState
+			if containerStatus.Name == restartGroup.Spec.Container {
+				containerState := NewContainerState(containerStatus.State)
+				containerStates[id] = containerState
 				break
 			}
 		}
 	}
-	return workerStates
+	return containerStates
 }
 
-func updateState(restartGroup *jobset.RestartGroup, workerStates map[string]WorkerState) error {
+func updateState(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
 	if restartGroup.Status.RestartStartedAt == nil {
 		restartGroup.Status.RestartStartedAt = &metav1.Time{}
 	}
 	if restartGroup.Status.RestartFinishedAt != nil { // Running
-		return updateStateWhenRunning(restartGroup, workerStates)
+		return updateStateWhenRunning(restartGroup, containerStates)
 	}
-	return updateStateWhenRestarting(restartGroup, workerStates) // Restarting
+	return updateStateWhenRestarting(restartGroup, containerStates) // Restarting
 }
 
-func updateStateWhenRunning(restartGroup *jobset.RestartGroup, workerStates map[string]WorkerState) error {
+func updateStateWhenRunning(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
 	var minimumFinishedAt *metav1.Time
-	for _, workerState := range workerStates {
-		// Check if worker failed after last restart end
-		if workerState.FinishedAt != nil && workerState.FinishedAt.After(restartGroup.Status.RestartFinishedAt.Time) && workerState.ExitCode != nil && *workerState.ExitCode != 0 {
-			// Check if worker was the first to fail
-			if minimumFinishedAt == nil || workerState.FinishedAt.Before(minimumFinishedAt) {
-				minimumFinishedAt = workerState.FinishedAt
+	for _, containerState := range containerStates {
+		// Check if container failed after last restart end
+		if containerState.FinishedAt != nil && containerState.FinishedAt.After(restartGroup.Status.RestartFinishedAt.Time) && containerState.ExitCode != nil && *containerState.ExitCode != 0 {
+			// Check if container was the first to fail
+			if minimumFinishedAt == nil || containerState.FinishedAt.Before(minimumFinishedAt) {
+				minimumFinishedAt = containerState.FinishedAt
 			}
 		}
 	}
@@ -237,26 +236,26 @@ func updateStateWhenRunning(restartGroup *jobset.RestartGroup, workerStates map[
 	return nil
 }
 
-func updateStateWhenRestarting(restartGroup *jobset.RestartGroup, workerStates map[string]WorkerState) error {
-	runningWorkerCount := int32(0)
+func updateStateWhenRestarting(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+	runningContainerCount := int32(0)
 	var maximumStartedAt *metav1.Time
-	for _, workerState := range workerStates {
-		// Check if worker started after restart start
-		if workerState.StartedAt != nil && workerState.StartedAt.After(restartGroup.Status.RestartStartedAt.Time) {
-			runningWorkerCount += 1
-			// Check if worker was the last to start
-			if maximumStartedAt == nil || workerState.StartedAt.After(maximumStartedAt.Time) {
-				maximumStartedAt = workerState.StartedAt
+	for _, containerState := range containerStates {
+		// Check if container started after restart start
+		if containerState.StartedAt != nil && containerState.StartedAt.After(restartGroup.Status.RestartStartedAt.Time) {
+			runningContainerCount += 1
+			// Check if container was the last to start
+			if maximumStartedAt == nil || containerState.StartedAt.After(maximumStartedAt.Time) {
+				maximumStartedAt = containerState.StartedAt
 			}
 		}
 	}
 	if maximumStartedAt == nil {
 		return nil
 	}
-	if runningWorkerCount > restartGroup.Spec.WorkerCount {
-		return fmt.Errorf("number of running workers is bigger than total number of workers")
+	if runningContainerCount > restartGroup.Spec.Size {
+		return fmt.Errorf("number of running containers is bigger than total number of containers")
 	}
-	if runningWorkerCount < restartGroup.Spec.WorkerCount {
+	if runningContainerCount < restartGroup.Spec.Size {
 		return nil
 	}
 	// Finish current group restart
@@ -271,60 +270,64 @@ func (r *RestartGroupReconciler) updateRestartGroupStatus(ctx context.Context, r
 	return nil
 }
 
-// TODO: Add jobset-name label to it
-// TODO: Add restart-group-name label to it
-// TODO: Use constants
 func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, restartGroup *jobset.RestartGroup) error {
 	log := ctrl.LoggerFrom(ctx)
 
-	// No need to create / update configmap if restart start is nil / zero
+	// No need to create / update broadcast ConfigMap if workload has never restarted
 	if restartGroup.Status.RestartStartedAt == nil || restartGroup.Status.RestartStartedAt.IsZero() {
 		return nil
 	}
 	desiredData := map[string]string{
-		"RestartStartedAt": restartGroup.Status.RestartStartedAt.Format(time.RFC3339Nano),
+		jobset.RestartStartedAtDataKey: restartGroup.Status.RestartStartedAt.Format(time.RFC3339Nano),
 	}
 
-	// Get configMap
+	// Get broadcast ConfigMap
 	var childConfigMaps corev1.ConfigMapList
-	if err := r.List(ctx, &childConfigMaps, client.InNamespace(restartGroup.Namespace), client.MatchingFields{".metadata.controller": restartGroup.Name}); err != nil {
+	if err := r.List(ctx, &childConfigMaps, client.InNamespace(restartGroup.Namespace), client.MatchingFields{ConfigMapOwnerKey: restartGroup.Name}); err != nil {
 		return err
 	}
 	if len(childConfigMaps.Items) > 1 {
-		return fmt.Errorf("expected 0 or 1 ConfigMap, but found %d", len(childConfigMaps.Items))
+		return fmt.Errorf("expected 0 or 1 child ConfigMap, but found %d", len(childConfigMaps.Items))
 	}
 
-	// Create configMap if it doesn't exist
+	// Create broadcast ConfigMap if it doesn't exist
 	if len(childConfigMaps.Items) == 0 {
-		configMapName := restartGroup.Name + "-broadcast"
-		newConfigMap := &corev1.ConfigMap{
+		BroadcastConfigMapName := getBroadcastConfigMapName(restartGroup)
+		broadcastConfigMap := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      configMapName,
+				Name:      BroadcastConfigMapName,
 				Namespace: restartGroup.Namespace,
+				Labels: map[string]string{
+					jobset.RestartGroupNameKey: restartGroup.Name,
+				},
 			},
 			Data: desiredData,
 		}
-		if err := ctrl.SetControllerReference(restartGroup, newConfigMap, r.Scheme); err != nil {
+		if err := ctrl.SetControllerReference(restartGroup, broadcastConfigMap, r.Scheme); err != nil {
 			return fmt.Errorf("setting controller reference: %w", err)
 		}
-		log.V(2).Info("Creating broadcast configmap", "configmap", klog.KObj(newConfigMap))
-		if err := r.Create(ctx, newConfigMap); err != nil {
-			return fmt.Errorf("creating configmap: %w", err)
+		log.V(2).Info("Creating broadcast configmap", "configmap", klog.KObj(broadcastConfigMap))
+		if err := r.Create(ctx, broadcastConfigMap); err != nil {
+			return fmt.Errorf("creating broadcast configmap: %w", err)
 		}
 	}
 
-	childConfigMap := childConfigMaps.Items[0]
+	broadcastConfigMap := childConfigMaps.Items[0]
 
 	// Skip update if nothing changed
-	if currentRestartStartedAt, ok := childConfigMap.Data["RestartStartedAt"]; ok && currentRestartStartedAt == desiredData["RestartStartedAt"] {
+	if currentRestartStartedAt, ok := broadcastConfigMap.Data[jobset.RestartStartedAtDataKey]; ok && currentRestartStartedAt == desiredData[jobset.RestartStartedAtDataKey] {
 		return nil
 	}
 
-	// Update configMap
-	childConfigMap.Data = desiredData
-	log.V(2).Info("Updating broadcast configmap", "configmap", klog.KObj(&childConfigMap))
-	if err := r.Update(ctx, &childConfigMap); err != nil {
-		return fmt.Errorf("updating configmap: %w", err)
+	// Update broadcast ConfigMap
+	broadcastConfigMap.Data = desiredData
+	log.V(2).Info("Updating broadcast configmap", "configmap", klog.KObj(&broadcastConfigMap))
+	if err := r.Update(ctx, &broadcastConfigMap); err != nil {
+		return fmt.Errorf("updating broadcast configmap: %w", err)
 	}
 	return nil
+}
+
+func getBroadcastConfigMapName(restartGroup *jobset.RestartGroup) string {
+	return restartGroup.Name + "-broadcast"
 }

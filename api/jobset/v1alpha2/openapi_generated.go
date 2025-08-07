@@ -798,35 +798,26 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 				Description: "RestartGroupSpec defines the desired state of RestartGroup",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"workerPodSelector": {
+					"container": {
 						SchemaProps: spec.SchemaProps{
-							Description: "WorkerPodSelector is a label selector for the pods that are part of this restart group.",
-							Default:     map[string]interface{}{},
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"),
-						},
-					},
-					"workerContainerName": {
-						SchemaProps: spec.SchemaProps{
-							Description: "WorkerContainerName is the name of the container to restart in the selected pods.",
+							Description: "Container is the name of the container to be watched in managed Pods. If any of the watched containers fails, a group restart is performed.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
 						},
 					},
-					"workerCount": {
+					"size": {
 						SchemaProps: spec.SchemaProps{
-							Description: "WorkerCount is the number of worker containers in the restart group.",
+							Description: "Size is the number of watched containers in the restart group.",
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
 					},
 				},
-				Required: []string{"workerPodSelector", "workerContainerName", "workerCount"},
+				Required: []string{"container", "size"},
 			},
 		},
-		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"},
 	}
 }
 
@@ -839,13 +830,13 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref common.ReferenceCa
 				Properties: map[string]spec.Schema{
 					"restartStartedAt": {
 						SchemaProps: spec.SchemaProps{
-							Description: "RestartStartedAt is the time when the restart operation was initiated.",
+							Description: "RestartStartedAt is the time when the group estart started.",
 							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},
 					"restartFinishedAt": {
 						SchemaProps: spec.SchemaProps{
-							Description: "RestartFinishedAt is the time when the restart operation completed.",
+							Description: "RestartFinishedAt is the time when the group restart finished.",
 							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},

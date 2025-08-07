@@ -149,7 +149,7 @@ func (r *JobSetReconciler) reconcile(ctx context.Context, js *jobset.JobSet, upd
 
 	// If in place restart is enabled, create a RestartGroup for the JobSet
 	if err := r.createRestartGroupIfNecessary(ctx, js); err != nil {
-		log.Error(err, "creating restart group")
+		log.Error(err, "creating restartgroup")
 		return ctrl.Result{}, err
 	}
 
@@ -277,78 +277,76 @@ func (r *JobSetReconciler) updateJobSetStatus(ctx context.Context, js *jobset.Jo
 	return nil
 }
 
-// TODO: Redo based on `createHeadlessSvcIfNecessary`
-// TODO: Add jobset-name label to it
 func (r *JobSetReconciler) createRestartGroupIfNecessary(ctx context.Context, js *jobset.JobSet) error {
 	log := ctrl.LoggerFrom(ctx)
 
-	// Check if feature is activated
-	workerContainerName, ok := js.Annotations["jobset.sigs.k8s.io/worker-container-name"] // TODO: Use constant
+	// RestartGroup is only necessary for workloads with in place restart enabled
+	targetContainerName, ok := js.Annotations[jobset.TargetContainerNameKey]
 	if !ok {
 		return nil
 	}
 
 	// Check if RestartGroup already exists
-	restartGroupName := js.Name + "-rg"
+	// If the RestartGroup doesn't exist in the same namespace, create it
 	var restartGroup jobset.RestartGroup
-	err := r.Get(ctx, types.NamespacedName{Name: restartGroupName, Namespace: js.Namespace}, &restartGroup)
-	if err == nil {
-		log.V(4).Info("restart group already exists", "name", restartGroupName)
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("getting restart group %s: %w", restartGroupName, err)
-	}
-
-	// Create RestartGroup
-	log.V(2).Info("creating restart group", "name", restartGroupName)
-	workerCount, err := countWorkers(js, workerContainerName)
+	restartGroupName := getRestartGroupName(js)
+	targetContainerCount, err := countContainers(js, targetContainerName)
 	if err != nil {
-		return fmt.Errorf("failed to get worker count")
+		return fmt.Errorf("failed to get target container '%s' count: %w", targetContainerName, err)
 	}
-	newRestartGroup := jobset.RestartGroup{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      restartGroupName,
-			Namespace: js.Namespace,
-		},
-		Spec: jobset.RestartGroupSpec{
-			WorkerPodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"jobset.sigs.k8s.io/restart-group-name": restartGroupName, // TODO: Use constant
+	if err := r.Get(ctx, types.NamespacedName{Name: restartGroupName, Namespace: js.Namespace}, &restartGroup); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		restartGroup := jobset.RestartGroup{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      restartGroupName,
+				Namespace: js.Namespace,
+				Labels: map[string]string{
+					jobset.JobSetNameKey: js.Name,
 				},
 			},
-			WorkerContainerName: workerContainerName,
-			WorkerCount:         workerCount,
-		},
+			Spec: jobset.RestartGroupSpec{
+				Container: targetContainerName,
+				Size:      targetContainerCount,
+			},
+		}
+
+		// Set controller owner reference for garbage collection and reconcilation
+		if err := ctrl.SetControllerReference(js, &restartGroup, r.Scheme); err != nil {
+			return err
+		}
+
+		// Create RestartGroup
+		if err := r.Create(ctx, &restartGroup); err != nil {
+			r.Record.Eventf(js, corev1.EventTypeWarning, RestartGroupCreationFailedReason, err.Error())
+			return err
+		}
+		log.V(2).Info("successfully created RestartGroup", "service", klog.KObj(&restartGroup))
 	}
-	// Set controller owner reference for garbage collection and reconcilation.
-	if err := ctrl.SetControllerReference(js, &newRestartGroup, r.Scheme); err != nil {
-		return err
-	}
-	if err := r.Create(ctx, &newRestartGroup); err != nil {
-		r.Record.Eventf(js, corev1.EventTypeWarning, "RestartGroupCreationFailed", "failed to create restart group %s: %v", restartGroupName, err)
-		return fmt.Errorf("creating restart group %s: %w", restartGroupName, err)
-	}
-	r.Record.Eventf(js, corev1.EventTypeNormal, "RestartGroupCreated", "successfully created restart group %s", restartGroupName)
 	return nil
 }
 
-func countWorkers(js *jobset.JobSet, workerContainerName string) (int32, error) {
-	currentWorkerCount := int32(0)
+func getRestartGroupName(js *jobset.JobSet) string {
+	return js.Name + "-rg"
+}
+
+func countContainers(js *jobset.JobSet, name string) (int32, error) {
+	currentCount := int32(0)
 	for _, rjob := range js.Spec.ReplicatedJobs {
 		jobTemplate := rjob.Template
 		podTemplate := jobTemplate.Spec.Template
 		for _, container := range podTemplate.Spec.Containers {
-			if container.Name == workerContainerName {
+			if container.Name == name {
 				if jobTemplate.Spec.Parallelism == nil {
 					return 0, fmt.Errorf("job parallelism is not set")
 				}
-				currentWorkerCount += rjob.Replicas * *jobTemplate.Spec.Parallelism
+				currentCount += rjob.Replicas * *jobTemplate.Spec.Parallelism
 				break
 			}
 		}
 	}
-	return currentWorkerCount, nil
+	return currentCount, nil
 }
 
 // getChildJobs gets jobs owned by the JobSet then categorizes them by status (active, successful, failed).
@@ -911,10 +909,11 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	annotations[jobset.GroupReplicasKey] = groupReplicas(js, rjob.GroupName)
 	annotations[jobset.JobGroupIndexKey] = groupJobIndex(js, rjob.GroupName, rjob.Name, jobIdx)
 
-	// Apply restart group label if in place restart is enabled
-	if _, ok := js.Annotations["jobset.sigs.k8s.io/worker-container-name"]; ok { // TODO: Use constant
-		restartGroupName := js.Name + "-rg"
-		labels["jobset.sigs.k8s.io/restart-group-name"] = restartGroupName // TODO: Use constant
+	// Apply RestartGroup labels if in place restart is enabled
+	if targetContainerName, ok := js.Annotations[jobset.TargetContainerNameKey]; ok {
+		restartGroupName := getRestartGroupName(js)
+		labels[jobset.RestartGroupNameKey] = restartGroupName
+		labels[jobset.TargetContainerNameKey] = targetContainerName
 	}
 
 	// Apply coordinator annotation/label if a coordinator is defined in the JobSet spec.
