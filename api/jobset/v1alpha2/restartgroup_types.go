@@ -23,24 +23,26 @@ const (
 	// TODO: Add description
 	TargetContainerNameKey = "jobset.sigs.k8s.io/target-container-name"
 	// TODO: Add description
-	RestartStartedAtDataKey = "RestartStartedAt"
+	RestartStartedAtKey = "RestartStartedAt"
 )
 
 // RestartGroupSpec defines the desired state of RestartGroup
 type RestartGroupSpec struct {
-	// Container is the name of the container to be watched in managed Pods.
-	// If any of the watched containers fails, a group restart is performed.
+	// Container is the name of the target container.
+	// Target containers are watched by the RestartGroup controller.
+	// If any of the target containers fails, a group restart is performed.
+	// This only applies to Pods managed by the RestartGroup
 	//+kubebuilder:validation:Required
 	Container string `json:"container"`
 
-	// Size is the number of watched containers in the restart group.
+	// Size is the number of target containers in the managed Pods by the RestartGroup.
 	//+kubebuilder:validation:Required
 	Size int32 `json:"size"`
 }
 
 // RestartGroupStatus defines the observed state of RestartGroup
 type RestartGroupStatus struct {
-	// RestartStartedAt is the time when the group estart started.
+	// RestartStartedAt is the time when the group restart started.
 	// +optional
 	RestartStartedAt *metav1.Time `json:"restartStartedAt"`
 

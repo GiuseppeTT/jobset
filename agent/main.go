@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	criSocketPath            = "unix:///run/containerd/containerd.sock"
-	criPodUidLabelKey        = "io.kubernetes.pod.uid"
-	criContainerNameLabelKey = "io.kubernetes.container.name"
-	RestartStartedAtDataKey  = "RestartStartedAt"
+	criSocketPath       = "unix:///run/containerd/containerd.sock"
+	criPodUidKey        = "io.kubernetes.pod.uid"
+	criContainerNameKey = "io.kubernetes.container.name"
+	RestartStartedAtKey = "RestartStartedAt"
 )
 
 func main() {
@@ -29,8 +29,8 @@ func main() {
 	kubernetesClient := getKubernetesClient()
 	criClient, criConnection := getCriClient()
 	defer criConnection.Close()
-	podNamespace, restartGroupName, podUid, targetContainerName := getEnvVars()
-	watchConfigMap(kubernetesClient, criClient, podNamespace, restartGroupName, podUid, targetContainerName)
+	podNamespace, podUid, restartGroupName, targetContainerName := getEnvVars()
+	watchBroadcastConfigMap(kubernetesClient, criClient, podNamespace, podUid, restartGroupName, targetContainerName)
 }
 
 func getKubernetesClient() *kubernetes.Clientset {
@@ -59,24 +59,24 @@ func getEnvVars() (string, string, string, string) {
 	if podNamespace == "" {
 		log.Fatalf("ERROR: 'POD_NAMESPACE' env var must be set")
 	}
-	restartGroupName := os.Getenv("RESTART_GROUP_NAME")
-	if restartGroupName == "" {
-		log.Fatalf("ERROR: 'RESTART_GROUP_NAME' env var must be set")
-	}
 	podUid := os.Getenv("POD_UID")
 	if podUid == "" {
 		log.Fatalf("ERROR: 'POD_UID' env var must be set")
+	}
+	restartGroupName := os.Getenv("RESTART_GROUP_NAME")
+	if restartGroupName == "" {
+		log.Fatalf("ERROR: 'RESTART_GROUP_NAME' env var must be set")
 	}
 	targetContainerName := os.Getenv("TARGET_CONTAINER_NAME")
 	if targetContainerName == "" {
 		log.Fatalf("ERROR: 'TARGET_CONTAINER_NAME' env var must be set")
 	}
-	return podNamespace, restartGroupName, podUid, targetContainerName
+	return podNamespace, podUid, restartGroupName, targetContainerName
 }
 
-func watchConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, podNamespace string, restartGroupName string, podUid string, targetContainerName string) {
-	configMapEventChannel := getConfigMapEventChannel(kubernetesClient, podNamespace, restartGroupName)
-	for event := range configMapEventChannel {
+func watchBroadcastConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, podNamespace string, podUid string, restartGroupName string, targetContainerName string) {
+	broadcastConfigMapEventChannel := getBroadcastConfigMapEventChannel(kubernetesClient, podNamespace, restartGroupName)
+	for event := range broadcastConfigMapEventChannel {
 		restartStartedAt, err := getRestartStartedAt(event)
 		if err != nil {
 			log.Printf("ERROR: Failed to get group restart start timestamp: %v", err)
@@ -85,15 +85,15 @@ func watchConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi
 		log.Printf("INFO: group restart started at %s", restartStartedAt)
 		targetContainer, err := getContainer(criClient, podUid, targetContainerName)
 		if err != nil {
-			log.Printf("ERROR: Failed to get target container: %v", err)
+			log.Printf("ERROR: Failed to get target container '%s': %v", targetContainerName, err)
 			continue
 		}
 		containerStartedAt, err := getContainerStartedAt(criClient, targetContainer)
 		if err != nil {
-			log.Printf("ERROR: Failed to get container start timestamp: %v", err)
+			log.Printf("ERROR: Failed to get target container '%s' start timestamp: %v", targetContainerName, err)
 			continue
 		}
-		log.Printf("INFO: target container started at %s", containerStartedAt)
+		log.Printf("INFO: Target container '%s' started at %s", targetContainerName, containerStartedAt)
 		if containerStartedAt.After(restartStartedAt) {
 			log.Printf("INFO: Target container '%s' started after restart start. No op", targetContainerName)
 			continue
@@ -107,13 +107,13 @@ func watchConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi
 	}
 }
 
-func getConfigMapEventChannel(kubernetesClient *kubernetes.Clientset, podNamespace string, restartGroupName string) <-chan watch.Event {
-	configMapName := restartGroupName + "-broadcast"
+func getBroadcastConfigMapEventChannel(kubernetesClient *kubernetes.Clientset, podNamespace string, restartGroupName string) <-chan watch.Event {
+	broadcastConfigMapName := restartGroupName + "-broadcast"
 	watcher, err := kubernetesClient.CoreV1().ConfigMaps(podNamespace).Watch(context.TODO(), metav1.ListOptions{
-		FieldSelector: fmt.Sprintf("metadata.name=%s", configMapName),
+		FieldSelector: fmt.Sprintf("metadata.name=%s", broadcastConfigMapName),
 	})
 	if err != nil {
-		log.Fatalf("ERROR: Failed to watch broadcast configMap '%s': %v", configMapName, err)
+		log.Fatalf("ERROR: Failed to watch broadcast ConfigMap '%s': %v", broadcastConfigMapName, err)
 	}
 	return watcher.ResultChan()
 }
@@ -123,9 +123,9 @@ func getRestartStartedAt(event watch.Event) (time.Time, error) {
 	if !ok {
 		return time.Time{}, fmt.Errorf("unexpected object type: %T", event.Object)
 	}
-	rawRestartStartedAt, ok := configMap.Data[RestartStartedAtDataKey]
+	rawRestartStartedAt, ok := configMap.Data[RestartStartedAtKey]
 	if !ok {
-		return time.Time{}, fmt.Errorf("'%s' not found in configMap", RestartStartedAtDataKey)
+		return time.Time{}, fmt.Errorf("'%s' not found in ConfigMap data", RestartStartedAtKey)
 	}
 	restartStartedAt, err := time.Parse(time.RFC3339, rawRestartStartedAt)
 	if err != nil {
@@ -141,8 +141,8 @@ func getContainer(criClient runtimeapi.RuntimeServiceClient, podUid string, cont
 				State: runtimeapi.ContainerState_CONTAINER_RUNNING,
 			},
 			LabelSelector: map[string]string{
-				criPodUidLabelKey:        podUid,
-				criContainerNameLabelKey: containerName,
+				criPodUidKey:        podUid,
+				criContainerNameKey: containerName,
 			},
 		},
 	})

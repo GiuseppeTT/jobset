@@ -16,6 +16,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -51,7 +52,8 @@ func NewRestartGroupReconciler(client client.Client, scheme *runtime.Scheme, rec
 	return &RestartGroupReconciler{Client: client, Scheme: scheme, Record: record}
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// TODO: Consider filterting Pod events which do not change the container state
+// SetupWithManager sets up the controller with the Manager
 func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&jobset.RestartGroup{}).
@@ -123,7 +125,7 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	log := ctrl.LoggerFrom(ctx).WithValues("restartgroup", klog.KObj(&restartGroup))
 	ctx = ctrl.LoggerInto(ctx, log)
-	log.V(4).Info("Reconciling RestartGroup")
+	log.V(4).Info("Reconciling RestartGroup") // Set to V(4) because any Pod update will trigger it
 
 	var managedPods corev1.PodList
 	if err := r.getManagedPods(ctx, restartGroup, &managedPods); err != nil {
@@ -133,8 +135,8 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	containerStates := getContainerStates(restartGroup, managedPods)
 
-	if err := updateRestartGroupState(&restartGroup, containerStates); err != nil {
-		log.Error(err, "updating restart group state")
+	if err := r.reconcile(ctx, &restartGroup, containerStates); err != nil {
+		log.Error(err, "reconciling restart group")
 		return ctrl.Result{}, err
 	}
 
@@ -207,21 +209,25 @@ func getContainerStates(restartGroup jobset.RestartGroup, managedPods corev1.Pod
 	return containerStates
 }
 
-func updateRestartGroupState(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+func (r *RestartGroupReconciler) reconcile(ctx context.Context, restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+	// Default RestartStartedAt to zero time
+	// This is useful because workload creation is treated as a restart
 	if restartGroup.Status.RestartStartedAt == nil {
 		restartGroup.Status.RestartStartedAt = &metav1.Time{}
 	}
 	if isGroupRestarting(restartGroup) {
-		return updateRestartGroupStateWhenRestarting(restartGroup, containerStates)
+		return r.reconcileWhenRestarting(ctx, restartGroup, containerStates)
 	}
-	return updateRestartGroupStateWhenRunning(restartGroup, containerStates)
+	return r.reconcileWhenRunning(ctx, restartGroup, containerStates)
 }
 
 func isGroupRestarting(restartGroup *jobset.RestartGroup) bool {
 	return restartGroup.Status.RestartFinishedAt == nil
 }
 
-func updateRestartGroupStateWhenRestarting(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+func (r *RestartGroupReconciler) reconcileWhenRestarting(ctx context.Context, restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	runningContainerCount := int32(0)
 	var maximumStartedAt *metav1.Time
 	for _, containerState := range containerStates {
@@ -234,21 +240,25 @@ func updateRestartGroupStateWhenRestarting(restartGroup *jobset.RestartGroup, co
 			}
 		}
 	}
-	if maximumStartedAt == nil {
-		return nil
-	}
 	if runningContainerCount > restartGroup.Spec.Size {
-		return fmt.Errorf("number of running containers is bigger than total number of containers")
+		return fmt.Errorf("number of running target containers (after the group restart start) is bigger than the total number of target containers")
 	}
 	if runningContainerCount < restartGroup.Spec.Size {
 		return nil
 	}
+	if maximumStartedAt == nil {
+		return fmt.Errorf("maximum startedAt is nil even though the number of running target containers (after the group restart start) is equal to the total number of target containers")
+	}
+
 	// Finish current group restart
+	log.V(2).Info("Finishing current group restart", "RestartStartedAt", restartGroup.Status.RestartStartedAt, "RestartFinishedAt", maximumStartedAt)
 	restartGroup.Status.RestartFinishedAt = maximumStartedAt
 	return nil
 }
 
-func updateRestartGroupStateWhenRunning(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+func (r *RestartGroupReconciler) reconcileWhenRunning(ctx context.Context, restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+	log := ctrl.LoggerFrom(ctx)
+
 	var minimumFinishedAt *metav1.Time
 	for _, containerState := range containerStates {
 		// Check if container failed after last restart end
@@ -262,17 +272,16 @@ func updateRestartGroupStateWhenRunning(restartGroup *jobset.RestartGroup, conta
 	if minimumFinishedAt == nil {
 		return nil
 	}
+
 	// Start a new group restart
+	log.V(2).Info("Starting a new group restart", "RestartStartedAt", minimumFinishedAt, "RestartFinishedAt", nil)
 	restartGroup.Status.RestartStartedAt = minimumFinishedAt
 	restartGroup.Status.RestartFinishedAt = nil
 	return nil
 }
 
 func (r *RestartGroupReconciler) updateRestartGroupStatus(ctx context.Context, restartGroup *jobset.RestartGroup) error {
-	if err := r.Status().Update(ctx, restartGroup); err != nil {
-		return err
-	}
-	return nil
+	return r.Status().Update(ctx, restartGroup)
 }
 
 func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, restartGroup *jobset.RestartGroup) error {
@@ -282,8 +291,9 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 	if restartGroup.Status.RestartStartedAt == nil || restartGroup.Status.RestartStartedAt.IsZero() {
 		return nil
 	}
+
 	desiredData := map[string]string{
-		jobset.RestartStartedAtDataKey: restartGroup.Status.RestartStartedAt.Format(time.RFC3339),
+		jobset.RestartStartedAtKey: restartGroup.Status.RestartStartedAt.Format(time.RFC3339),
 	}
 
 	// Get broadcast ConfigMap
@@ -297,23 +307,24 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 
 	// Create broadcast ConfigMap if it doesn't exist
 	if len(childConfigMaps.Items) == 0 {
-		BroadcastConfigMapName := getBroadcastConfigMapName(restartGroup)
-		broadcastConfigMap := &corev1.ConfigMap{
+		broadcastConfigMapName := getBroadcastConfigMapName(restartGroup)
+		broadcastConfigMapNamespace := restartGroup.Namespace
+		broadcastConfigMapLabels := maps.Clone(restartGroup.Labels)
+		broadcastConfigMapLabels[jobset.RestartGroupNameKey] = restartGroup.Name
+		broadcastConfigMap := corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      BroadcastConfigMapName,
-				Namespace: restartGroup.Namespace,
-				Labels: map[string]string{
-					jobset.RestartGroupNameKey: restartGroup.Name,
-				},
+				Name:      broadcastConfigMapName,
+				Namespace: broadcastConfigMapNamespace,
+				Labels:    broadcastConfigMapLabels,
 			},
 			Data: desiredData,
 		}
-		if err := ctrl.SetControllerReference(restartGroup, broadcastConfigMap, r.Scheme); err != nil {
+		if err := ctrl.SetControllerReference(restartGroup, &broadcastConfigMap, r.Scheme); err != nil {
 			return fmt.Errorf("setting controller reference: %w", err)
 		}
-		log.V(2).Info("Creating broadcast configmap", "configmap", klog.KObj(broadcastConfigMap))
-		if err := r.Create(ctx, broadcastConfigMap); err != nil {
-			return fmt.Errorf("creating broadcast configmap: %w", err)
+		log.V(2).Info("Creating broadcast ConfigMap", "configmap", klog.KObj(&broadcastConfigMap))
+		if err := r.Create(ctx, &broadcastConfigMap); err != nil {
+			return fmt.Errorf("creating broadcast ConfigMap: %w", err)
 		}
 		return nil
 	}
@@ -321,15 +332,15 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 	broadcastConfigMap := childConfigMaps.Items[0]
 
 	// Skip update if nothing changed
-	if currentRestartStartedAt, ok := broadcastConfigMap.Data[jobset.RestartStartedAtDataKey]; ok && currentRestartStartedAt == desiredData[jobset.RestartStartedAtDataKey] {
+	if currentRestartStartedAt, ok := broadcastConfigMap.Data[jobset.RestartStartedAtKey]; ok && currentRestartStartedAt == desiredData[jobset.RestartStartedAtKey] {
 		return nil
 	}
 
 	// Update broadcast ConfigMap
 	broadcastConfigMap.Data = desiredData
-	log.V(2).Info("Updating broadcast configmap", "configmap", klog.KObj(&broadcastConfigMap))
+	log.V(2).Info("Updating broadcast ConfigMap", "configmap", klog.KObj(&broadcastConfigMap))
 	if err := r.Update(ctx, &broadcastConfigMap); err != nil {
-		return fmt.Errorf("updating broadcast configmap: %w", err)
+		return fmt.Errorf("updating broadcast ConfigMap: %w", err)
 	}
 	return nil
 }

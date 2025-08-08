@@ -322,7 +322,7 @@ func (r *JobSetReconciler) createRestartGroupIfNecessary(ctx context.Context, js
 			r.Record.Eventf(js, corev1.EventTypeWarning, RestartGroupCreationFailedReason, err.Error())
 			return err
 		}
-		log.V(2).Info("successfully created RestartGroup", "service", klog.KObj(&restartGroup))
+		log.V(2).Info("successfully created RestartGroup", "restartgroup", klog.KObj(&restartGroup))
 	}
 	return nil
 }
@@ -338,8 +338,8 @@ func countContainers(js *jobset.JobSet, name string) (int32, error) {
 		podTemplate := jobTemplate.Spec.Template
 		for _, container := range podTemplate.Spec.Containers {
 			if container.Name == name {
-				if jobTemplate.Spec.Parallelism == nil {
-					return 0, fmt.Errorf("job parallelism is not set")
+				if jobTemplate.Spec.Completions == nil || jobTemplate.Spec.Parallelism == nil || *jobTemplate.Spec.Completions != *jobTemplate.Spec.Parallelism {
+					return 0, fmt.Errorf("restart group assumes jobTemplate.spec.completions = jobTemplate.spec.parallelism != nil")
 				}
 				currentCount += rjob.Replicas * *jobTemplate.Spec.Parallelism
 				break
@@ -909,11 +909,12 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	annotations[jobset.GroupReplicasKey] = groupReplicas(js, rjob.GroupName)
 	annotations[jobset.JobGroupIndexKey] = groupJobIndex(js, rjob.GroupName, rjob.Name, jobIdx)
 
-	// Apply RestartGroup labels if in place restart is enabled
+	// Apply RestartGroup labels / annotations if in place restart is enabled
 	if targetContainerName, ok := js.Annotations[jobset.TargetContainerNameKey]; ok {
 		restartGroupName := getRestartGroupName(js)
 		labels[jobset.RestartGroupNameKey] = restartGroupName
-		labels[jobset.TargetContainerNameKey] = targetContainerName
+		annotations[jobset.RestartGroupNameKey] = restartGroupName
+		annotations[jobset.TargetContainerNameKey] = targetContainerName
 	}
 
 	// Apply coordinator annotation/label if a coordinator is defined in the JobSet spec.
