@@ -116,10 +116,8 @@ func SetupRestartGroupIndexes(ctx context.Context, indexer client.FieldIndexer) 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
 func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	// Get RestartGroup from apiserver
 	var restartGroup jobset.RestartGroup
-	if err := r.Get(ctx, req.NamespacedName, &restartGroup); err != nil {
-		// we'll ignore not-found errors, since there is nothing we can do here.
+	if err := r.getReconciledRestartGroup(ctx, req, &restartGroup); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -127,35 +125,38 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	ctx = ctrl.LoggerInto(ctx, log)
 	log.V(4).Info("Reconciling RestartGroup")
 
-	// Get all pods managed by the RestartGroup
-	// TODO: Turn into function
 	var managedPods corev1.PodList
-	if err := r.List(ctx, &managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{PodRestartGroupNameKey: restartGroup.Name}); err != nil {
-		log.Error(err, "listing pods")
+	if err := r.getManagedPods(ctx, restartGroup, managedPods); err != nil {
+		log.Error(err, "getting managed pods")
 		return ctrl.Result{}, err
 	}
-	log.V(2).Info("Found pods", "count", len(managedPods.Items))
 
-	// Get container states
 	containerStates := getContainerStates(restartGroup, managedPods)
 
-	// Update restart state
-	if err := updateState(&restartGroup, containerStates); err != nil {
-		log.Error(err, "updating restart group")
+	if err := updateRestartGroupState(&restartGroup, containerStates); err != nil {
+		log.Error(err, "updating restart group state")
 		return ctrl.Result{}, err
 	}
 
-	// Update RestartGroup status
 	if err := r.updateRestartGroupStatus(ctx, &restartGroup); apierrors.IsConflict(err) {
+		log.Error(err, "updating restart group status")
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Broadcast if necessary
 	if err := r.updateBroadcastConfigMap(ctx, &restartGroup); err != nil {
-		log.Error(err, "broadcasting restart signal")
+		log.Error(err, "updating broadcast configmap")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *RestartGroupReconciler) getReconciledRestartGroup(ctx context.Context, req ctrl.Request, restartGroup *jobset.RestartGroup) error {
+	return r.Get(ctx, req.NamespacedName, restartGroup)
+}
+
+func (r *RestartGroupReconciler) getManagedPods(ctx context.Context, restartGroup jobset.RestartGroup, managedPods corev1.PodList) error {
+	return r.List(ctx, &managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{PodRestartGroupNameKey: restartGroup.Name})
 }
 
 type ContainerState struct {
@@ -206,41 +207,25 @@ func getContainerStates(restartGroup jobset.RestartGroup, managedPods corev1.Pod
 	return containerStates
 }
 
-func updateState(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+func updateRestartGroupState(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
 	if restartGroup.Status.RestartStartedAt == nil {
 		restartGroup.Status.RestartStartedAt = &metav1.Time{}
 	}
-	if restartGroup.Status.RestartFinishedAt != nil { // Running
-		return updateStateWhenRunning(restartGroup, containerStates)
+	if isGroupRestarting(restartGroup) {
+		return updateRestartGroupStateWhenRestarting(restartGroup, containerStates)
 	}
-	return updateStateWhenRestarting(restartGroup, containerStates) // Restarting
+	return updateRestartGroupStateWhenRunning(restartGroup, containerStates)
 }
 
-func updateStateWhenRunning(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
-	var minimumFinishedAt *metav1.Time
-	for _, containerState := range containerStates {
-		// Check if container failed after last restart end
-		if containerState.FinishedAt != nil && containerState.FinishedAt.After(restartGroup.Status.RestartFinishedAt.Time) && containerState.ExitCode != nil && *containerState.ExitCode != 0 {
-			// Check if container was the first to fail
-			if minimumFinishedAt == nil || containerState.FinishedAt.Before(minimumFinishedAt) {
-				minimumFinishedAt = containerState.FinishedAt
-			}
-		}
-	}
-	if minimumFinishedAt == nil {
-		return nil
-	}
-	// Start a new group restart
-	restartGroup.Status.RestartStartedAt = minimumFinishedAt
-	restartGroup.Status.RestartFinishedAt = nil
-	return nil
+func isGroupRestarting(restartGroup *jobset.RestartGroup) bool {
+	return restartGroup.Status.RestartFinishedAt == nil
 }
 
-func updateStateWhenRestarting(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+func updateRestartGroupStateWhenRestarting(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
 	runningContainerCount := int32(0)
 	var maximumStartedAt *metav1.Time
 	for _, containerState := range containerStates {
-		// Check if container started after restart start
+		// Check if container started after group restart start
 		if containerState.StartedAt != nil && containerState.StartedAt.After(restartGroup.Status.RestartStartedAt.Time) {
 			runningContainerCount += 1
 			// Check if container was the last to start
@@ -263,6 +248,26 @@ func updateStateWhenRestarting(restartGroup *jobset.RestartGroup, containerState
 	return nil
 }
 
+func updateRestartGroupStateWhenRunning(restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+	var minimumFinishedAt *metav1.Time
+	for _, containerState := range containerStates {
+		// Check if container failed after last restart end
+		if containerState.FinishedAt != nil && containerState.FinishedAt.After(restartGroup.Status.RestartFinishedAt.Time) && containerState.ExitCode != nil && *containerState.ExitCode != 0 {
+			// Check if container was the first to fail
+			if minimumFinishedAt == nil || containerState.FinishedAt.Before(minimumFinishedAt) {
+				minimumFinishedAt = containerState.FinishedAt
+			}
+		}
+	}
+	if minimumFinishedAt == nil {
+		return nil
+	}
+	// Start a new group restart
+	restartGroup.Status.RestartStartedAt = minimumFinishedAt
+	restartGroup.Status.RestartFinishedAt = nil
+	return nil
+}
+
 func (r *RestartGroupReconciler) updateRestartGroupStatus(ctx context.Context, restartGroup *jobset.RestartGroup) error {
 	if err := r.Status().Update(ctx, restartGroup); err != nil {
 		return err
@@ -278,7 +283,7 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 		return nil
 	}
 	desiredData := map[string]string{
-		jobset.RestartStartedAtDataKey: restartGroup.Status.RestartStartedAt.Format(time.RFC3339Nano),
+		jobset.RestartStartedAtDataKey: restartGroup.Status.RestartStartedAt.Format(time.RFC3339),
 	}
 
 	// Get broadcast ConfigMap
@@ -310,6 +315,7 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 		if err := r.Create(ctx, broadcastConfigMap); err != nil {
 			return fmt.Errorf("creating broadcast configmap: %w", err)
 		}
+		return nil
 	}
 
 	broadcastConfigMap := childConfigMaps.Items[0]

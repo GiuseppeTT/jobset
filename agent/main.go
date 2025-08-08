@@ -21,7 +21,6 @@ const (
 	criSocketPath            = "unix:///run/containerd/containerd.sock"
 	criPodUidLabelKey        = "io.kubernetes.pod.uid"
 	criContainerNameLabelKey = "io.kubernetes.container.name"
-	jobSetNamespace          = "jobset-system"
 	RestartStartedAtDataKey  = "RestartStartedAt"
 )
 
@@ -30,8 +29,8 @@ func main() {
 	kubernetesClient := getKubernetesClient()
 	criClient, criConnection := getCriClient()
 	defer criConnection.Close()
-	jobSetName, podUid, workerContainerName := getEnvVars()
-	watchConfigMap(kubernetesClient, criClient, jobSetName, podUid, workerContainerName)
+	podNamespace, restartGroupName, podUid, targetContainerName := getEnvVars()
+	watchConfigMap(kubernetesClient, criClient, podNamespace, restartGroupName, podUid, targetContainerName)
 }
 
 func getKubernetesClient() *kubernetes.Clientset {
@@ -55,62 +54,66 @@ func getCriClient() (runtimeapi.RuntimeServiceClient, *grpc.ClientConn) {
 	return criClient, criConnection
 }
 
-func getEnvVars() (string, string, string) {
-	jobSetName := os.Getenv("JOBSET_NAME")
-	if jobSetName == "" {
-		log.Fatalf("ERROR: 'JOBSET_NAME' env var must be set")
+func getEnvVars() (string, string, string, string) {
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace == "" {
+		log.Fatalf("ERROR: 'POD_NAMESPACE' env var must be set")
+	}
+	restartGroupName := os.Getenv("RESTART_GROUP_NAME")
+	if restartGroupName == "" {
+		log.Fatalf("ERROR: 'RESTART_GROUP_NAME' env var must be set")
 	}
 	podUid := os.Getenv("POD_UID")
 	if podUid == "" {
-		log.Fatalf("ERROR: 'POD_NAME' env var must be set")
+		log.Fatalf("ERROR: 'POD_UID' env var must be set")
 	}
-	workerContainerName := os.Getenv("WORKER_CONTAINER_NAME")
-	if workerContainerName == "" {
-		log.Fatalf("ERROR: 'WORKER_CONTAINER_NAME' env var must be set")
+	targetContainerName := os.Getenv("TARGET_CONTAINER_NAME")
+	if targetContainerName == "" {
+		log.Fatalf("ERROR: 'TARGET_CONTAINER_NAME' env var must be set")
 	}
-	return jobSetName, podUid, workerContainerName
+	return podNamespace, restartGroupName, podUid, targetContainerName
 }
 
-func watchConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, jobSetName string, podUid string, workerContainerName string) {
-	configMapEventChannel := getConfigMapEventChannel(kubernetesClient, jobSetName)
+func watchConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, podNamespace string, restartGroupName string, podUid string, targetContainerName string) {
+	configMapEventChannel := getConfigMapEventChannel(kubernetesClient, podNamespace, restartGroupName)
 	for event := range configMapEventChannel {
 		restartStartedAt, err := getRestartStartedAt(event)
 		if err != nil {
-			log.Printf("ERROR: Failed to get restart start timestamp: %v", err)
+			log.Printf("ERROR: Failed to get group restart start timestamp: %v", err)
 			continue
 		}
-		log.Printf("INFO: restartStartedAt=%s", restartStartedAt)
-		workerContainer, err := getContainer(criClient, podUid, workerContainerName)
+		log.Printf("INFO: group restart started at %s", restartStartedAt)
+		targetContainer, err := getContainer(criClient, podUid, targetContainerName)
 		if err != nil {
-			log.Printf("ERROR: Failed to get worker container: %v", err)
+			log.Printf("ERROR: Failed to get target container: %v", err)
 			continue
 		}
-		containerStartedAt, err := getContainerStartedAt(criClient, workerContainer)
+		containerStartedAt, err := getContainerStartedAt(criClient, targetContainer)
 		if err != nil {
 			log.Printf("ERROR: Failed to get container start timestamp: %v", err)
 			continue
 		}
-		log.Printf("DEBUG: containerStartedAt=%s", containerStartedAt)
+		log.Printf("INFO: target container started at %s", containerStartedAt)
 		if containerStartedAt.After(restartStartedAt) {
-			log.Printf("INFO: Worker container '%s' started after restart start. No op", workerContainerName)
+			log.Printf("INFO: Target container '%s' started after restart start. No op", targetContainerName)
 			continue
 		}
-		log.Printf("INFO: Killing worker container '%s'", workerContainerName)
-		err = killContainer(criClient, workerContainer)
+		log.Printf("INFO: Killing target container '%s'", targetContainerName)
+		err = killContainer(criClient, targetContainer)
 		if err != nil {
-			log.Printf("ERROR: Failed to kill worker container '%s': %v", workerContainerName, err)
+			log.Printf("ERROR: Failed to kill target container '%s': %v", targetContainerName, err)
 			continue
 		}
 	}
 }
 
-func getConfigMapEventChannel(kubernetesClient *kubernetes.Clientset, jobSetName string) <-chan watch.Event {
-	configMapName := jobSetName + "-rg-broadcast"
-	watcher, err := kubernetesClient.CoreV1().ConfigMaps("default").Watch(context.TODO(), metav1.ListOptions{ // TODO: Get namespace from env by Pod namespace
+func getConfigMapEventChannel(kubernetesClient *kubernetes.Clientset, podNamespace string, restartGroupName string) <-chan watch.Event {
+	configMapName := restartGroupName + "-broadcast"
+	watcher, err := kubernetesClient.CoreV1().ConfigMaps(podNamespace).Watch(context.TODO(), metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("metadata.name=%s", configMapName),
 	})
 	if err != nil {
-		log.Fatalf("ERROR: Failed to watch configMap '%s': %v", configMapName, err)
+		log.Fatalf("ERROR: Failed to watch broadcast configMap '%s': %v", configMapName, err)
 	}
 	return watcher.ResultChan()
 }
