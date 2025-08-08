@@ -198,7 +198,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := controllers.SetupRestartGroupIndexes(ctx, mgr.GetFieldIndexer()); err != nil {
-		setupLog.Error(err, "unable to setup restartgroiup reconciler indexes")
+		setupLog.Error(err, "unable to setup restartgroup reconciler indexes")
 		os.Exit(1)
 	}
 

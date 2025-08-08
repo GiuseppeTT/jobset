@@ -126,7 +126,7 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	log.V(4).Info("Reconciling RestartGroup")
 
 	var managedPods corev1.PodList
-	if err := r.getManagedPods(ctx, restartGroup, managedPods); err != nil {
+	if err := r.getManagedPods(ctx, restartGroup, &managedPods); err != nil {
 		log.Error(err, "getting managed pods")
 		return ctrl.Result{}, err
 	}
@@ -155,8 +155,8 @@ func (r *RestartGroupReconciler) getReconciledRestartGroup(ctx context.Context, 
 	return r.Get(ctx, req.NamespacedName, restartGroup)
 }
 
-func (r *RestartGroupReconciler) getManagedPods(ctx context.Context, restartGroup jobset.RestartGroup, managedPods corev1.PodList) error {
-	return r.List(ctx, &managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{PodRestartGroupNameKey: restartGroup.Name})
+func (r *RestartGroupReconciler) getManagedPods(ctx context.Context, restartGroup jobset.RestartGroup, managedPods *corev1.PodList) error {
+	return r.List(ctx, managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{PodRestartGroupNameKey: restartGroup.Name})
 }
 
 type ContainerState struct {
