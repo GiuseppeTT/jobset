@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -201,6 +202,12 @@ func getContainerStates(restartGroup jobset.RestartGroup, managedPods corev1.Pod
 		for _, containerStatus := range pod.Status.ContainerStatuses {
 			if containerStatus.Name == restartGroup.Spec.Container {
 				containerState := NewContainerState(containerStatus.State)
+				// Check if container is running but the Pod is marked for instant deletion
+				// This is useful for the case of Node failure
+				if containerStatus.State.Running != nil && pod.DeletionTimestamp != nil && pod.DeletionGracePeriodSeconds != nil && *pod.DeletionGracePeriodSeconds == 0 {
+					containerState.FinishedAt = pod.DeletionTimestamp
+					containerState.ExitCode = ptr.To(int32(137))
+				}
 				containerStates[id] = containerState
 				break
 			}
