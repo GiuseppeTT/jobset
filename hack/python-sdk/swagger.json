@@ -461,12 +461,12 @@
       ],
       "properties": {
         "container": {
-          "description": "Container is the name of the container to be watched in managed Pods. If any of the watched containers fails, a group restart is performed.",
+          "description": "Container is the name of the target container. Target containers are watched by the RestartGroup controller. If any of the target containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
           "type": "string",
           "default": ""
         },
         "size": {
-          "description": "Size is the number of watched containers in the restart group.",
+          "description": "Size is the number of target containers in the managed Pods by the RestartGroup.",
           "type": "integer",
           "format": "int32",
           "default": 0
@@ -482,7 +482,7 @@
           "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
         },
         "restartStartedAt": {
-          "description": "RestartStartedAt is the time when the group estart started.",
+          "description": "RestartStartedAt is the time when the group restart started.",
           "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
         }
       }

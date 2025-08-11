@@ -26,8 +26,8 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
     """
     RestartGroupSpec defines the desired state of RestartGroup
     """ # noqa: E501
-    container: StrictStr = Field(description="Container is the name of the container to be watched in managed Pods. If any of the watched containers fails, a group restart is performed.")
-    size: StrictInt = Field(description="Size is the number of watched containers in the restart group.")
+    container: StrictStr = Field(description="Container is the name of the target container. Target containers are watched by the RestartGroup controller. If any of the target containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup")
+    size: StrictInt = Field(description="Size is the number of target containers in the managed Pods by the RestartGroup.")
     __properties: ClassVar[List[str]] = ["container", "size"]
 
     model_config = ConfigDict(

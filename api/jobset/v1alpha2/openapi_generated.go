@@ -800,7 +800,7 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 				Properties: map[string]spec.Schema{
 					"container": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Container is the name of the container to be watched in managed Pods. If any of the watched containers fails, a group restart is performed.",
+							Description: "Container is the name of the target container. Target containers are watched by the RestartGroup controller. If any of the target containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -808,7 +808,7 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 					},
 					"size": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Size is the number of watched containers in the restart group.",
+							Description: "Size is the number of target containers in the managed Pods by the RestartGroup.",
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
@@ -830,7 +830,7 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref common.ReferenceCa
 				Properties: map[string]spec.Schema{
 					"restartStartedAt": {
 						SchemaProps: spec.SchemaProps{
-							Description: "RestartStartedAt is the time when the group estart started.",
+							Description: "RestartStartedAt is the time when the group restart started.",
 							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},
