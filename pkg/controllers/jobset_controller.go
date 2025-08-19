@@ -281,7 +281,7 @@ func (r *JobSetReconciler) createRestartGroupIfNecessary(ctx context.Context, js
 	log := ctrl.LoggerFrom(ctx)
 
 	// RestartGroup is only necessary for workloads with in place restart enabled
-	targetContainerName, ok := js.Annotations[jobset.TargetContainerNameKey]
+	targetContainerName, ok := js.Annotations[jobset.WorkerContainerNameKey]
 	if !ok {
 		return nil
 	}
@@ -910,11 +910,11 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	annotations[jobset.JobGroupIndexKey] = groupJobIndex(js, rjob.GroupName, rjob.Name, jobIdx)
 
 	// Apply RestartGroup labels / annotations if in place restart is enabled
-	if targetContainerName, ok := js.Annotations[jobset.TargetContainerNameKey]; ok {
+	if targetContainerName, ok := js.Annotations[jobset.WorkerContainerNameKey]; ok {
 		restartGroupName := getRestartGroupName(js)
 		labels[jobset.RestartGroupNameKey] = restartGroupName
 		annotations[jobset.RestartGroupNameKey] = restartGroupName
-		annotations[jobset.TargetContainerNameKey] = targetContainerName
+		annotations[jobset.WorkerContainerNameKey] = targetContainerName
 	}
 
 	// Apply coordinator annotation/label if a coordinator is defined in the JobSet spec.
