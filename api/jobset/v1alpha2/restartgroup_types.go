@@ -19,9 +19,15 @@ import (
 
 const (
 	// TODO: Add description
-	RestartGroupNameKey = "jobset.sigs.k8s.io/restart-group-name"
+	RestartGroupNameKey = "alpha.jobset.sigs.k8s.io/restart-group-name"
 	// TODO: Add description
-	WorkerContainerNameKey = "jobset.sigs.k8s.io/worker-container-name"
+	WorkerContainerNameKey = "alpha.jobset.sigs.k8s.io/worker-container-name"
+	// TODO: Add description
+	BarrierStartedAtKey = "alpha.jobset.sigs.k8s.io/barrier-started-at"
+	// TODO: Add description
+	LiftBarrierStartedAtKey = "alpha.jobset.sigs.k8s.io/lift-barrier-started-at"
+	// TODO: Add description
+	RestartWorkerStartedAt = "alpha.jobset.sigs.k8s.io/restart-worker-started-at"
 )
 
 // RestartGroupSpec defines the desired state of RestartGroup
@@ -40,13 +46,15 @@ type RestartGroupSpec struct {
 
 // RestartGroupStatus defines the observed state of RestartGroup
 type RestartGroupStatus struct {
-	// RestartStartedAt is the time when the group restart started.
+	// TODO: Description
 	// +optional
-	RestartStartedAt *metav1.Time `json:"restartStartedAt"`
+	WorkerStatuses map[string]WorkerStatus `json:"workerStatuses,omitempty"`
+}
 
-	// RestartFinishedAt is the time when the group restart finished.
-	// +optional
-	RestartFinishedAt *metav1.Time `json:"restartFinishedAt"`
+// TODO: Description
+type WorkerStatus struct {
+	// TODO: Description
+	BarrierStartedAt *metav1.Time `json:"barrierStartedAt"`
 }
 
 //+kubebuilder:object:root=true

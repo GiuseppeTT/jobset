@@ -42,6 +42,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.RestartGroupStatus":  schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref),
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.StartupPolicy":       schema_jobset_api_jobset_v1alpha2_StartupPolicy(ref),
 		"sigs.k8s.io/jobset/api/jobset/v1alpha2.SuccessPolicy":       schema_jobset_api_jobset_v1alpha2_SuccessPolicy(ref),
+		"sigs.k8s.io/jobset/api/jobset/v1alpha2.WorkerStatus":        schema_jobset_api_jobset_v1alpha2_WorkerStatus(ref),
 	}
 }
 
@@ -800,7 +801,7 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 				Properties: map[string]spec.Schema{
 					"container": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Container is the name of the target container. Target containers are watched by the RestartGroup controller. If any of the target containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
+							Description: "Container is the name of the worker container. Worker containers are watched by the RestartGroup controller. If any of the worker containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -808,7 +809,7 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 					},
 					"size": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Size is the number of target containers in the managed Pods by the RestartGroup.",
+							Description: "Size is the number of worker containers in the managed Pods by the RestartGroup.",
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
@@ -828,23 +829,25 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref common.ReferenceCa
 				Description: "RestartGroupStatus defines the observed state of RestartGroup",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"restartStartedAt": {
+					"workerStatuses": {
 						SchemaProps: spec.SchemaProps{
-							Description: "RestartStartedAt is the time when the group restart started.",
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
-						},
-					},
-					"restartFinishedAt": {
-						SchemaProps: spec.SchemaProps{
-							Description: "RestartFinishedAt is the time when the group restart finished.",
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Type: []string{"object"},
+							AdditionalProperties: &spec.SchemaOrBool{
+								Allows: true,
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("sigs.k8s.io/jobset/api/jobset/v1alpha2.WorkerStatus"),
+									},
+								},
+							},
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
+			"sigs.k8s.io/jobset/api/jobset/v1alpha2.WorkerStatus"},
 	}
 }
 
@@ -907,5 +910,25 @@ func schema_jobset_api_jobset_v1alpha2_SuccessPolicy(ref common.ReferenceCallbac
 				Required: []string{"operator"},
 			},
 		},
+	}
+}
+
+func schema_jobset_api_jobset_v1alpha2_WorkerStatus(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Type: []string{"object"},
+				Properties: map[string]spec.Schema{
+					"barrierStartedAt": {
+						SchemaProps: spec.SchemaProps{
+							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+						},
+					},
+				},
+				Required: []string{"barrierStartedAt"},
+			},
+		},
+		Dependencies: []string{
+			"k8s.io/apimachinery/pkg/apis/meta/v1.Time"},
 	}
 }

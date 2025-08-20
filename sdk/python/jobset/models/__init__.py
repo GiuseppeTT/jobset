@@ -147,3 +147,4 @@ from jobset.models.jobset_v1alpha2_restart_group_spec import JobsetV1alpha2Resta
 from jobset.models.jobset_v1alpha2_restart_group_status import JobsetV1alpha2RestartGroupStatus
 from jobset.models.jobset_v1alpha2_startup_policy import JobsetV1alpha2StartupPolicy
 from jobset.models.jobset_v1alpha2_success_policy import JobsetV1alpha2SuccessPolicy
+from jobset.models.jobset_v1alpha2_worker_status import JobsetV1alpha2WorkerStatus

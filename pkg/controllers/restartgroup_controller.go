@@ -15,6 +15,10 @@ package controllers
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,12 +34,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+	"sigs.k8s.io/jobset/pkg/constants"
 )
 
 const (
 	RestartGroupKind                 = "RestartGroup"
 	PodRestartGroupNameKey           = "podRestartGroupName"
-	ConfigMapOwnerKey                = ".metadata.controller"
 	RestartGroupCreationFailedReason = "RestartGroupCreationFailed"
 )
 
@@ -53,7 +58,6 @@ func NewRestartGroupReconciler(client client.Client, scheme *runtime.Scheme, rec
 func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&jobset.RestartGroup{}).
-		Owns(&corev1.ConfigMap{}).
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -88,20 +92,6 @@ func SetupRestartGroupIndexes(ctx context.Context, indexer client.FieldIndexer) 
 		return err
 	}
 
-	if err := indexer.IndexField(ctx, &corev1.ConfigMap{}, ConfigMapOwnerKey, func(obj client.Object) []string {
-		configMap := obj.(*corev1.ConfigMap)
-		owner := metav1.GetControllerOf(configMap)
-		if owner == nil {
-			return nil
-		}
-		if owner.APIVersion != apiGVStr || owner.Kind != RestartGroupKind {
-			return nil
-		}
-		return []string{owner.Name}
-	}); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -128,9 +118,21 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
+	currentWorkerStatuses := getWorkerStatuses(restartGroup, managedPods)
+
+	if err := r.reconcile(ctx, &restartGroup, currentWorkerStatuses, managedPods); err != nil {
+		log.Error(err, "reconciling restart group")
+		return ctrl.Result{}, err
+	}
+
 	if err := r.updateRestartGroupStatus(ctx, &restartGroup); apierrors.IsConflict(err) {
 		log.Error(err, "updating restart group status")
 		return ctrl.Result{Requeue: true}, nil
+	}
+
+	if err := r.liftBarriers(ctx, restartGroup, managedPods); err != nil {
+		log.Error(err, "restarting workers")
+		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
@@ -146,4 +148,193 @@ func (r *RestartGroupReconciler) getManagedPods(ctx context.Context, restartGrou
 
 func (r *RestartGroupReconciler) updateRestartGroupStatus(ctx context.Context, restartGroup *jobset.RestartGroup) error {
 	return r.Status().Update(ctx, restartGroup)
+}
+
+type InternalWorkerStatus struct {
+	BarrierStartedAt *metav1.Time
+	WorkerStartedAt  *metav1.Time
+}
+
+func NewInternalWorkerStatus(barrierStartedAt *metav1.Time, workerStartedAt *metav1.Time) (InternalWorkerStatus, error) {
+	if barrierStartedAt == nil && workerStartedAt == nil {
+		return InternalWorkerStatus{}, fmt.Errorf("both barrierStartedAt and workerStartedAt are nil")
+	}
+	if barrierStartedAt != nil && workerStartedAt != nil {
+		return InternalWorkerStatus{}, fmt.Errorf("both barrierStartedAt and workerStartedAt are not nil")
+	}
+	return InternalWorkerStatus{
+		BarrierStartedAt: barrierStartedAt,
+		WorkerStartedAt:  workerStartedAt,
+	}, nil
+}
+
+func (ws InternalWorkerStatus) IsWaiting() bool {
+	return ws.BarrierStartedAt != nil && ws.WorkerStartedAt == nil
+}
+
+func (ws InternalWorkerStatus) IsRunning() bool {
+	return ws.BarrierStartedAt == nil && ws.WorkerStartedAt != nil
+}
+
+func getWorkerStatuses(restartGroup jobset.RestartGroup, managedPods corev1.PodList) map[string]InternalWorkerStatus {
+	workerStatuses := make(map[string]InternalWorkerStatus, restartGroup.Spec.Size)
+	for _, pod := range managedPods.Items {
+		id := pod.GenerateName
+		if barrierStartedAtRaw, ok := pod.Annotations[jobset.BarrierStartedAtKey]; ok {
+			barrierStartedAt, err := time.Parse(time.RFC3339, barrierStartedAtRaw)
+			if err != nil {
+				continue
+			}
+			barrierStartedAtValue := metav1.NewTime(barrierStartedAt)
+			workerStatus, err := NewInternalWorkerStatus(&barrierStartedAtValue, nil)
+			if err != nil {
+				continue
+			}
+			workerStatuses[id] = workerStatus
+			continue
+		}
+		for _, containerStatus := range pod.Status.ContainerStatuses {
+			if containerStatus.Name == restartGroup.Spec.Container {
+				if containerStatus.State.Running == nil {
+					continue
+				}
+				workerStatus, err := NewInternalWorkerStatus(nil, &containerStatus.State.Running.StartedAt)
+				if err != nil {
+					break
+				}
+				workerStatuses[id] = workerStatus
+				break
+			}
+		}
+	}
+	return workerStatuses
+}
+
+func (r *RestartGroupReconciler) reconcile(ctx context.Context, restartGroup *jobset.RestartGroup, currentWorkerStatuses map[string]InternalWorkerStatus, managedPods corev1.PodList) error {
+	// All workers are running
+	// Good, no op
+	if allWorkersAreRunning(*restartGroup, currentWorkerStatuses) {
+		return nil
+	}
+	// All workers are waiting at the barrier
+	// Make sure saved barrier is current to lift it
+	if allWorkersAreWaiting(*restartGroup, currentWorkerStatuses) {
+		return saveBarrier(restartGroup, currentWorkerStatuses)
+	}
+	// There are workers running but one of the workers is in a new barrier
+	// Must restart running workers
+	if newBarrier(*restartGroup, currentWorkerStatuses) {
+		return r.restartWorkers(ctx, currentWorkerStatuses, managedPods)
+	}
+	// Current barrier is still lifting
+	// Workers are either running or in the saved barrier
+	// Good, no op
+	return nil
+}
+
+func allWorkersAreRunning(restartGroup jobset.RestartGroup, currentWorkerStatuses map[string]InternalWorkerStatus) bool {
+	runningWorkerCount := 0
+	for _, currentWorkerStatus := range currentWorkerStatuses {
+		if currentWorkerStatus.IsRunning() {
+			runningWorkerCount++
+		}
+	}
+	return runningWorkerCount == int(restartGroup.Spec.Size)
+}
+
+func allWorkersAreWaiting(restartGroup jobset.RestartGroup, currentWorkerStatuses map[string]InternalWorkerStatus) bool {
+	workerWaitingCount := 0
+	for _, currentWorkerStatus := range currentWorkerStatuses {
+		if currentWorkerStatus.IsWaiting() {
+			workerWaitingCount++
+		}
+	}
+	return workerWaitingCount == int(restartGroup.Spec.Size)
+}
+
+func saveBarrier(restartGroup *jobset.RestartGroup, currentWorkerStatuses map[string]InternalWorkerStatus) error {
+	savedWorkerStatuses := make(map[string]jobset.WorkerStatus, restartGroup.Spec.Size)
+	for id, currentWorkerStatus := range currentWorkerStatuses {
+		savedWorkerStatuses[id] = jobset.WorkerStatus{
+			BarrierStartedAt: currentWorkerStatus.BarrierStartedAt,
+		}
+	}
+	restartGroup.Status.WorkerStatuses = savedWorkerStatuses
+	return nil
+}
+
+func newBarrier(restartGroup jobset.RestartGroup, currentWorkerStatuses map[string]InternalWorkerStatus) bool {
+	for id, currentWorkerStatus := range currentWorkerStatuses {
+		if currentWorkerStatus.IsRunning() {
+			continue
+		}
+		savedWorkerState, ok := restartGroup.Status.WorkerStatuses[id]
+		if !ok {
+			continue // Unexpected
+		}
+		if !currentWorkerStatus.BarrierStartedAt.Equal(savedWorkerState.BarrierStartedAt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *RestartGroupReconciler) restartWorkers(ctx context.Context, currentWorkerStatuses map[string]InternalWorkerStatus, managedPods corev1.PodList) error {
+	log := ctrl.LoggerFrom(ctx)
+	var (
+		lock      sync.Mutex
+		finalErrs []error
+	)
+	workqueue.ParallelizeUntil(ctx, constants.MaxParallelism, len(managedPods.Items), func(i int) {
+		pod := &managedPods.Items[i]
+		id := pod.GenerateName
+		currentWorkerStatus, ok := currentWorkerStatuses[id]
+		if !ok || (ok && !currentWorkerStatus.IsRunning()) {
+			return
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Annotations == nil {
+			pod.Annotations = make(map[string]string)
+		}
+		pod.Annotations[jobset.RestartWorkerStartedAt] = currentWorkerStatus.WorkerStartedAt.Format(time.RFC3339)
+		if err := r.Patch(ctx, pod, patch); err != nil {
+			lock.Lock()
+			defer lock.Unlock()
+			log.Error(err, "patching pod with annotation", "pod", klog.KObj(pod))
+			finalErrs = append(finalErrs, fmt.Errorf("patching pod %s: %w", pod.Name, err))
+			return
+		}
+		log.V(2).Info("patched pod with annotation", "pod", klog.KObj(pod))
+	})
+	return errors.Join(finalErrs...)
+}
+
+func (r *RestartGroupReconciler) liftBarriers(ctx context.Context, restartGroup jobset.RestartGroup, managedPods corev1.PodList) error {
+	log := ctrl.LoggerFrom(ctx)
+	var (
+		lock      sync.Mutex
+		finalErrs []error
+	)
+	workqueue.ParallelizeUntil(ctx, constants.MaxParallelism, len(managedPods.Items), func(i int) {
+		pod := &managedPods.Items[i]
+		id := pod.GenerateName
+		savedWorkerStatus, ok := restartGroup.Status.WorkerStatuses[id]
+		if !ok {
+			return
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Annotations == nil {
+			pod.Annotations = make(map[string]string)
+		}
+		pod.Annotations[jobset.LiftBarrierStartedAtKey] = savedWorkerStatus.BarrierStartedAt.Format(time.RFC3339)
+		if err := r.Patch(ctx, pod, patch); err != nil {
+			lock.Lock()
+			defer lock.Unlock()
+			log.Error(err, "patching pod with annotation", "pod", klog.KObj(pod))
+			finalErrs = append(finalErrs, fmt.Errorf("patching pod %s: %w", pod.Name, err))
+			return
+		}
+		log.V(2).Info("patched pod with annotation", "pod", klog.KObj(pod))
+	})
+	return errors.Join(finalErrs...)
 }

@@ -144,6 +144,7 @@ jobset/models/jobset_v1alpha2_restart_group_spec.py
 jobset/models/jobset_v1alpha2_restart_group_status.py
 jobset/models/jobset_v1alpha2_startup_policy.py
 jobset/models/jobset_v1alpha2_success_policy.py
+jobset/models/jobset_v1alpha2_worker_status.py
 jobset/py.typed
 jobset/rest.py
 pyproject.toml
@@ -285,4 +286,5 @@ test/test_jobset_v1alpha2_restart_group_spec.py
 test/test_jobset_v1alpha2_restart_group_status.py
 test/test_jobset_v1alpha2_startup_policy.py
 test/test_jobset_v1alpha2_success_policy.py
+test/test_jobset_v1alpha2_worker_status.py
 tox.ini

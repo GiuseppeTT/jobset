@@ -83,8 +83,10 @@ class TestJobsetV1alpha2RestartGroupList(unittest.TestCase):
                             container = '', 
                             size = 56, ), 
                         status = jobset.models.jobset_v1alpha2_restart_group_status.JobsetV1alpha2RestartGroupStatus(
-                            restart_finished_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), 
-                            restart_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), ), )
+                            worker_statuses = {
+                                'key' : jobset.models.jobset_v1alpha2_worker_status.JobsetV1alpha2WorkerStatus(
+                                    barrier_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), )
+                                }, ), )
                     ],
                 kind = '',
                 metadata = jobset.models.io/k8s/apimachinery/pkg/apis/meta/v1/list_meta.io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta(
@@ -142,8 +144,10 @@ class TestJobsetV1alpha2RestartGroupList(unittest.TestCase):
                             container = '', 
                             size = 56, ), 
                         status = jobset.models.jobset_v1alpha2_restart_group_status.JobsetV1alpha2RestartGroupStatus(
-                            restart_finished_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), 
-                            restart_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), ), )
+                            worker_statuses = {
+                                'key' : jobset.models.jobset_v1alpha2_worker_status.JobsetV1alpha2WorkerStatus(
+                                    barrier_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), )
+                                }, ), )
                     ],
         )
         """

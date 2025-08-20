@@ -17,9 +17,9 @@ import pprint
 import re  # noqa: F401
 import json
 
-from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List, Optional
+from jobset.models.jobset_v1alpha2_worker_status import JobsetV1alpha2WorkerStatus
 from typing import Optional, Set
 from typing_extensions import Self
 
@@ -27,9 +27,8 @@ class JobsetV1alpha2RestartGroupStatus(BaseModel):
     """
     RestartGroupStatus defines the observed state of RestartGroup
     """ # noqa: E501
-    restart_finished_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="restartFinishedAt")
-    restart_started_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="restartStartedAt")
-    __properties: ClassVar[List[str]] = ["restartFinishedAt", "restartStartedAt"]
+    worker_statuses: Optional[Dict[str, JobsetV1alpha2WorkerStatus]] = Field(default=None, alias="workerStatuses")
+    __properties: ClassVar[List[str]] = ["workerStatuses"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -70,6 +69,13 @@ class JobsetV1alpha2RestartGroupStatus(BaseModel):
             exclude=excluded_fields,
             exclude_none=True,
         )
+        # override the default output from pydantic by calling `to_dict()` of each value in worker_statuses (dict)
+        _field_dict = {}
+        if self.worker_statuses:
+            for _key_worker_statuses in self.worker_statuses:
+                if self.worker_statuses[_key_worker_statuses]:
+                    _field_dict[_key_worker_statuses] = self.worker_statuses[_key_worker_statuses].to_dict()
+            _dict['workerStatuses'] = _field_dict
         return _dict
 
     @classmethod
@@ -82,8 +88,12 @@ class JobsetV1alpha2RestartGroupStatus(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "restartFinishedAt": obj.get("restartFinishedAt"),
-            "restartStartedAt": obj.get("restartStartedAt")
+            "workerStatuses": dict(
+                (_k, JobsetV1alpha2WorkerStatus.from_dict(_v))
+                for _k, _v in obj["workerStatuses"].items()
+            )
+            if obj.get("workerStatuses") is not None
+            else None
         })
         return _obj
 

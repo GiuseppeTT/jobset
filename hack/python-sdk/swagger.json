@@ -145,7 +145,7 @@
         },
         "metadata": {
           "default": {},
-          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.4/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
         },
         "spec": {
           "default": {},
@@ -181,7 +181,7 @@
         },
         "metadata": {
           "default": {},
-          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.4/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"
         }
       }
     },
@@ -244,7 +244,7 @@
           "type": "array",
           "items": {
             "default": {},
-            "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Condition"
+            "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.4/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Condition"
           },
           "x-kubernetes-list-map-keys": [
             "type"
@@ -345,7 +345,7 @@
         "template": {
           "description": "Template defines the template of the Job that will be created.",
           "default": {},
-          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.api.batch.v1.JobTemplateSpec"
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.4/api/openapi-spec/swagger.json#/definitions/io.k8s.api.batch.v1.JobTemplateSpec"
         }
       }
     },
@@ -412,7 +412,7 @@
         },
         "metadata": {
           "default": {},
-          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.4/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
         },
         "spec": {
           "default": {},
@@ -448,7 +448,7 @@
         },
         "metadata": {
           "default": {},
-          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.4/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ListMeta"
         }
       }
     },
@@ -461,12 +461,12 @@
       ],
       "properties": {
         "container": {
-          "description": "Container is the name of the target container. Target containers are watched by the RestartGroup controller. If any of the target containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
+          "description": "Container is the name of the worker container. Worker containers are watched by the RestartGroup controller. If any of the worker containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
           "type": "string",
           "default": ""
         },
         "size": {
-          "description": "Size is the number of target containers in the managed Pods by the RestartGroup.",
+          "description": "Size is the number of worker containers in the managed Pods by the RestartGroup.",
           "type": "integer",
           "format": "int32",
           "default": 0
@@ -477,13 +477,12 @@
       "description": "RestartGroupStatus defines the observed state of RestartGroup",
       "type": "object",
       "properties": {
-        "restartFinishedAt": {
-          "description": "RestartFinishedAt is the time when the group restart finished.",
-          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
-        },
-        "restartStartedAt": {
-          "description": "RestartStartedAt is the time when the group restart started.",
-          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.3/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
+        "workerStatuses": {
+          "type": "object",
+          "additionalProperties": {
+            "default": {},
+            "$ref": "#/definitions/jobset.v1alpha2.WorkerStatus"
+          }
         }
       }
     },
@@ -519,6 +518,17 @@
             "default": ""
           },
           "x-kubernetes-list-type": "atomic"
+        }
+      }
+    },
+    "jobset.v1alpha2.WorkerStatus": {
+      "type": "object",
+      "required": [
+        "barrierStartedAt"
+      ],
+      "properties": {
+        "barrierStartedAt": {
+          "$ref": "https://raw.githubusercontent.com/kubernetes/kubernetes/refs/tags/v1.33.4/api/openapi-spec/swagger.json#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Time"
         }
       }
     }

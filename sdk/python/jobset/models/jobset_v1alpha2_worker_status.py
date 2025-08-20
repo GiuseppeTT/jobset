@@ -17,18 +17,18 @@ import pprint
 import re  # noqa: F401
 import json
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, ClassVar, Dict, List
 from typing import Optional, Set
 from typing_extensions import Self
 
-class JobsetV1alpha2RestartGroupSpec(BaseModel):
+class JobsetV1alpha2WorkerStatus(BaseModel):
     """
-    RestartGroupSpec defines the desired state of RestartGroup
+    JobsetV1alpha2WorkerStatus
     """ # noqa: E501
-    container: StrictStr = Field(description="Container is the name of the worker container. Worker containers are watched by the RestartGroup controller. If any of the worker containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup")
-    size: StrictInt = Field(description="Size is the number of worker containers in the managed Pods by the RestartGroup.")
-    __properties: ClassVar[List[str]] = ["container", "size"]
+    barrier_started_at: datetime = Field(description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="barrierStartedAt")
+    __properties: ClassVar[List[str]] = ["barrierStartedAt"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -48,7 +48,7 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
 
     @classmethod
     def from_json(cls, json_str: str) -> Optional[Self]:
-        """Create an instance of JobsetV1alpha2RestartGroupSpec from a JSON string"""
+        """Create an instance of JobsetV1alpha2WorkerStatus from a JSON string"""
         return cls.from_dict(json.loads(json_str))
 
     def to_dict(self) -> Dict[str, Any]:
@@ -73,7 +73,7 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
 
     @classmethod
     def from_dict(cls, obj: Optional[Dict[str, Any]]) -> Optional[Self]:
-        """Create an instance of JobsetV1alpha2RestartGroupSpec from a dict"""
+        """Create an instance of JobsetV1alpha2WorkerStatus from a dict"""
         if obj is None:
             return None
 
@@ -81,8 +81,7 @@ class JobsetV1alpha2RestartGroupSpec(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "container": obj.get("container") if obj.get("container") is not None else '',
-            "size": obj.get("size") if obj.get("size") is not None else 0
+            "barrierStartedAt": obj.get("barrierStartedAt")
         })
         return _obj
 
