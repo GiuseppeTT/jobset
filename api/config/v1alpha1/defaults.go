@@ -34,8 +34,8 @@ const (
 	DefaultLeaderElectionRenewDeadline         = 10 * time.Second
 	DefaultLeaderElectionRetryPeriod           = 2 * time.Second
 	DefaultResourceLock                        = "leases"
-	DefaultClientConnectionQPS         float32 = 500
-	DefaultClientConnectionBurst       int32   = 500
+	DefaultClientConnectionQPS         float32 = 5000
+	DefaultClientConnectionBurst       int32   = 5000
 )
 
 // SetDefaults_Configuration sets default values for ComponentConfig.

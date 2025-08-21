@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
-	"sigs.k8s.io/jobset/pkg/constants"
 )
 
 const (
@@ -110,31 +109,37 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	log := ctrl.LoggerFrom(ctx).WithValues("restartgroup", klog.KObj(&restartGroup))
 	ctx = ctrl.LoggerInto(ctx, log)
-	log.V(4).Info("Reconciling RestartGroup") // Set to V(4) because any Pod update will trigger it
+	log.V(2).Info("Reconciling RestartGroup")
 
+	log.V(2).Info("Getting managed Pods")
 	var managedPods corev1.PodList
 	if err := r.getManagedPods(ctx, restartGroup, &managedPods); err != nil {
 		log.Error(err, "getting managed pods")
 		return ctrl.Result{}, err
 	}
 
+	log.V(2).Info("Getting current worker states")
 	currentWorkerStatuses := getWorkerStatuses(restartGroup, managedPods)
 
+	log.V(2).Info("Calculating new state")
 	if err := r.reconcile(ctx, &restartGroup, currentWorkerStatuses, managedPods); err != nil {
 		log.Error(err, "reconciling restart group")
 		return ctrl.Result{}, err
 	}
 
+	log.V(2).Info("Updating RestartGroup status")
 	if err := r.updateRestartGroupStatus(ctx, &restartGroup); apierrors.IsConflict(err) {
 		log.Error(err, "updating restart group status")
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	log.V(2).Info("Lifting barrier")
 	if err := r.liftBarriers(ctx, restartGroup, managedPods); err != nil {
-		log.Error(err, "restarting workers")
+		log.Error(err, "lifting barrier")
 		return ctrl.Result{}, err
 	}
 
+	log.V(2).Info("Finishing RestartGroup reconcile")
 	return ctrl.Result{}, nil
 }
 
@@ -285,11 +290,14 @@ func (r *RestartGroupReconciler) restartWorkers(ctx context.Context, currentWork
 		lock      sync.Mutex
 		finalErrs []error
 	)
-	workqueue.ParallelizeUntil(ctx, constants.MaxParallelism, len(managedPods.Items), func(i int) {
+	workqueue.ParallelizeUntil(ctx, 500, len(managedPods.Items), func(i int) {
 		pod := &managedPods.Items[i]
 		id := pod.GenerateName
 		currentWorkerStatus, ok := currentWorkerStatuses[id]
 		if !ok || (ok && !currentWorkerStatus.IsRunning()) {
+			return
+		}
+		if annotationRestartWorkerStartedAt, ok := pod.Annotations[jobset.RestartWorkerStartedAt]; ok && annotationRestartWorkerStartedAt == currentWorkerStatus.WorkerStartedAt.Format(time.RFC3339) {
 			return
 		}
 		patch := client.MergeFrom(pod.DeepCopy())
@@ -304,7 +312,6 @@ func (r *RestartGroupReconciler) restartWorkers(ctx context.Context, currentWork
 			finalErrs = append(finalErrs, fmt.Errorf("patching pod %s: %w", pod.Name, err))
 			return
 		}
-		log.V(2).Info("patched pod with annotation", "pod", klog.KObj(pod))
 	})
 	return errors.Join(finalErrs...)
 }
@@ -315,11 +322,14 @@ func (r *RestartGroupReconciler) liftBarriers(ctx context.Context, restartGroup 
 		lock      sync.Mutex
 		finalErrs []error
 	)
-	workqueue.ParallelizeUntil(ctx, constants.MaxParallelism, len(managedPods.Items), func(i int) {
+	workqueue.ParallelizeUntil(ctx, 500, len(managedPods.Items), func(i int) {
 		pod := &managedPods.Items[i]
 		id := pod.GenerateName
 		savedWorkerStatus, ok := restartGroup.Status.WorkerStatuses[id]
 		if !ok {
+			return
+		}
+		if annotationLiftBarrierStartedAt, ok := pod.Annotations[jobset.LiftBarrierStartedAtKey]; ok && annotationLiftBarrierStartedAt == savedWorkerStatus.BarrierStartedAt.Format(time.RFC3339) {
 			return
 		}
 		patch := client.MergeFrom(pod.DeepCopy())
@@ -334,7 +344,6 @@ func (r *RestartGroupReconciler) liftBarriers(ctx context.Context, restartGroup 
 			finalErrs = append(finalErrs, fmt.Errorf("patching pod %s: %w", pod.Name, err))
 			return
 		}
-		log.V(2).Info("patched pod with annotation", "pod", klog.KObj(pod))
 	})
 	return errors.Join(finalErrs...)
 }

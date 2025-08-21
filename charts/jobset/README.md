@@ -76,8 +76,8 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | image.tag | string | `"main"` |  |
 | controller.replicas | int | `1` | Replicas of the jobset controller deployment. |
 | controller.leaderElection.enable | bool | `true` | Whether to enable leader election for jobset controller. |
-| controller.clientConnection.qps | int | `500` | QPS is the number of queries per second allowed for K8S api server connection. |
-| controller.clientConnection.burst | int | `500` | Burst allows extra queries to accumulate when a client is exceeding its rate. |
+| controller.clientConnection.qps | int | `5000` | QPS is the number of queries per second allowed for K8S api server connection. |
+| controller.clientConnection.burst | int | `5000` | Burst allows extra queries to accumulate when a client is exceeding its rate. |
 | controller.env | list | `[]` | Environment variables of the jobset controller container. |
 | controller.envFrom | list | `[]` | Environment variable sources of the jobset controller container. |
 | controller.volumeMounts | list | `[]` | Volume mounts of the jobset controller container. |

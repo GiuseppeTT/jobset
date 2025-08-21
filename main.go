@@ -22,6 +22,7 @@ import (
 	"flag"
 	"net/http"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -79,8 +80,8 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.Float64Var(&qps, "kube-api-qps", 500, "Maximum QPS to use while talking with Kubernetes API")
-	flag.IntVar(&burst, "kube-api-burst", 500, "Maximum burst for throttle while talking with Kubernetes API")
+	flag.Float64Var(&qps, "kube-api-qps", 5000, "Maximum QPS to use while talking with Kubernetes API")
+	flag.IntVar(&burst, "kube-api-burst", 5000, "Maximum burst for throttle while talking with Kubernetes API")
 	flag.StringVar(&featureGates, "feature-gates", "", "A set of key=value pairs that describe feature gates for alpha/experimental features.")
 	flag.StringVar(&configFile, "config", "",
 		"The controller will load its initial configuration from this file. "+
@@ -149,6 +150,15 @@ func main() {
 	} else {
 		kubeConfig.Burst = int(*cfg.ClientConnection.Burst)
 	}
+
+	leaseDuration := time.Second * 60
+	renewDeadline := time.Second * 30
+	retryPeriod := time.Second * 5
+	kubeConfig.QPS = 5000
+	kubeConfig.Burst = 5000
+	options.LeaseDuration = &leaseDuration
+	options.RenewDeadline = &renewDeadline
+	options.RetryPeriod = &retryPeriod
 
 	// Disabling http/2 to prevent being vulnerable to the HTTP/2 Stream Cancellation and
 	// Rapid Reset CVEs. For more information see:

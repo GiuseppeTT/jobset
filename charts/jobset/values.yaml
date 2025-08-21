@@ -38,9 +38,9 @@ controller:
     enable: true
   clientConnection:
     # -- QPS is the number of queries per second allowed for K8S api server connection.
-    qps: 500
+    qps: 5000
     # --  Burst allows extra queries to accumulate when a client is exceeding its rate.
-    burst: 500
+    burst: 5000
   # -- Environment variables of the jobset controller container.
   env: []
   # -- Environment variable sources of the jobset controller container.
