@@ -41,13 +41,13 @@ spec:
             properties:
               container:
                 description: |-
-                  Container is the name of the target container.
-                  Target containers are watched by the RestartGroup controller.
-                  If any of the target containers fails, a group restart is performed.
+                  Container is the name of the worker container.
+                  worker containers are watched by the RestartGroup controller.
+                  If any of the worker containers fails, a group restart is performed.
                   This only applies to Pods managed by the RestartGroup
                 type: string
               size:
-                description: Size is the number of target containers in the managed
+                description: Size is the number of worker containers in the managed
                   Pods by the RestartGroup.
                 format: int32
                 type: integer
@@ -58,13 +58,10 @@ spec:
           status:
             description: RestartGroupStatus defines the observed state of RestartGroup
             properties:
-              restartFinishedAt:
-                description: RestartFinishedAt is the time when the group restart
-                  finished.
+              liftBarrierStartedBeforeOrAt:
                 format: date-time
                 type: string
-              restartStartedAt:
-                description: RestartStartedAt is the time when the group restart started.
+              restartWorkerStartedBeforeOrAt:
                 format: date-time
                 type: string
             type: object

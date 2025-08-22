@@ -800,7 +800,7 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 				Properties: map[string]spec.Schema{
 					"container": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Container is the name of the target container. Target containers are watched by the RestartGroup controller. If any of the target containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
+							Description: "Container is the name of the worker container. worker containers are watched by the RestartGroup controller. If any of the worker containers fails, a group restart is performed. This only applies to Pods managed by the RestartGroup",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -808,7 +808,7 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupSpec(ref common.ReferenceCall
 					},
 					"size": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Size is the number of target containers in the managed Pods by the RestartGroup.",
+							Description: "Size is the number of worker containers in the managed Pods by the RestartGroup.",
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
@@ -828,16 +828,14 @@ func schema_jobset_api_jobset_v1alpha2_RestartGroupStatus(ref common.ReferenceCa
 				Description: "RestartGroupStatus defines the observed state of RestartGroup",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"restartStartedAt": {
+					"liftBarrierStartedBeforeOrAt": {
 						SchemaProps: spec.SchemaProps{
-							Description: "RestartStartedAt is the time when the group restart started.",
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},
-					"restartFinishedAt": {
+					"restartWorkerStartedBeforeOrAt": {
 						SchemaProps: spec.SchemaProps{
-							Description: "RestartFinishedAt is the time when the group restart finished.",
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
+							Ref: ref("k8s.io/apimachinery/pkg/apis/meta/v1.Time"),
 						},
 					},
 				},

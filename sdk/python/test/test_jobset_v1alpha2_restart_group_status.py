@@ -35,8 +35,8 @@ class TestJobsetV1alpha2RestartGroupStatus(unittest.TestCase):
         model = JobsetV1alpha2RestartGroupStatus()
         if include_optional:
             return JobsetV1alpha2RestartGroupStatus(
-                restart_finished_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'),
-                restart_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f')
+                lift_barrier_started_before_or_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'),
+                restart_worker_started_before_or_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f')
             )
         else:
             return JobsetV1alpha2RestartGroupStatus(

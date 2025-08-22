@@ -80,8 +80,8 @@ class TestJobsetV1alpha2RestartGroup(unittest.TestCase):
                     container = '', 
                     size = 56, ),
                 status = jobset.models.jobset_v1alpha2_restart_group_status.JobsetV1alpha2RestartGroupStatus(
-                    restart_finished_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), 
-                    restart_started_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), )
+                    lift_barrier_started_before_or_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), 
+                    restart_worker_started_before_or_at = datetime.datetime.strptime('2013-10-20 19:20:30.00', '%Y-%m-%d %H:%M:%S.%f'), )
             )
         else:
             return JobsetV1alpha2RestartGroup(

@@ -20,13 +20,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -53,7 +51,6 @@ func NewRestartGroupReconciler(client client.Client, scheme *runtime.Scheme, rec
 	return &RestartGroupReconciler{Client: client, Scheme: scheme, Record: record}
 }
 
-// TODO: Consider filterting Pod events which do not change the container state
 // SetupWithManager sets up the controller with the Manager
 func (r *RestartGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -126,7 +123,7 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	log := ctrl.LoggerFrom(ctx).WithValues("restartgroup", klog.KObj(&restartGroup))
 	ctx = ctrl.LoggerInto(ctx, log)
-	log.V(4).Info("Reconciling RestartGroup") // Set to V(4) because any Pod update will trigger it
+	log.V(2).Info("Reconciling RestartGroup")
 
 	var managedPods corev1.PodList
 	if err := r.getManagedPods(ctx, restartGroup, &managedPods); err != nil {
@@ -134,22 +131,46 @@ func (r *RestartGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	containerStates := getContainerStates(restartGroup, managedPods)
+	currentWorkerStatuses := getWorkerStatuses(restartGroup, managedPods)
 
-	if err := r.reconcile(ctx, &restartGroup, containerStates); err != nil {
-		log.Error(err, "reconciling restart group")
-		return ctrl.Result{}, err
+	// If all workers are running, great, no op
+	if allWorkersAreRunning(restartGroup, currentWorkerStatuses) {
+		log.V(2).Info("All workers are running")
+		return ctrl.Result{}, nil
 	}
 
-	if err := r.updateRestartGroupStatus(ctx, &restartGroup); apierrors.IsConflict(err) {
-		log.Error(err, "updating restart group status")
-		return ctrl.Result{Requeue: true}, nil
+	// If all workers are waiting, make sure lift state and broadcast configmap are updated
+	if allWorkersAreWaiting(restartGroup, currentWorkerStatuses) {
+		log.V(2).Info("All workers are waiting")
+		currentLiftBarrierStartedBeforeOrAt := getLiftBarrierStartedBeforeOrAt(currentWorkerStatuses)
+		if err := r.updateLiftBarrierStartedBeforeOrAtState(ctx, &restartGroup, currentLiftBarrierStartedBeforeOrAt); err != nil {
+			log.Error(err, "updating lift barrier started before or at state")
+			return ctrl.Result{}, err
+		}
+		if err := r.broadcastConfigMap(ctx, &restartGroup); err != nil {
+			log.Error(err, "broadcasting ConfigMap")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
-	if err := r.updateBroadcastConfigMap(ctx, &restartGroup); err != nil {
-		log.Error(err, "updating broadcast configmap")
-		return ctrl.Result{}, err
+	// If new barrier, make sure restart state and broadcast configmap are updated
+	if newBarrier(restartGroup, currentWorkerStatuses) {
+		log.V(2).Info("New barrier")
+		currentRestartWorkerStartedBeforeOrAt := getRestartWorkerStartedBeforeOrAt(restartGroup, currentWorkerStatuses)
+		log.V(2).Info("DEBUG Value", "currentRestartWorkerStartedBeforeOrAt", currentRestartWorkerStartedBeforeOrAt)
+		if err := r.updateRestartWorkerStartedBeforeOrAtState(ctx, &restartGroup, currentRestartWorkerStartedBeforeOrAt); err != nil {
+			log.Error(err, "updating restart worker started before or at state")
+			return ctrl.Result{}, err
+		}
+		if err := r.broadcastConfigMap(ctx, &restartGroup); err != nil {
+			log.Error(err, "broadcasting ConfigMap")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
+
+	log.V(2).Info("No case")
 
 	return ctrl.Result{}, nil
 }
@@ -162,145 +183,118 @@ func (r *RestartGroupReconciler) getManagedPods(ctx context.Context, restartGrou
 	return r.List(ctx, managedPods, client.InNamespace(restartGroup.Namespace), client.MatchingFields{PodRestartGroupNameKey: restartGroup.Name})
 }
 
-type ContainerState struct {
-	StartedAt  *metav1.Time
-	FinishedAt *metav1.Time
-	ExitCode   *int32
+type WorkerStatus struct {
+	BarrierStartedAt *metav1.Time
+	WorkerStartedAt  *metav1.Time
 }
 
-func NewContainerState(containerState corev1.ContainerState) ContainerState {
-	if containerState.Waiting != nil {
-		return ContainerState{
-			StartedAt:  nil,
-			FinishedAt: nil,
-			ExitCode:   nil,
-		}
-	} else if containerState.Running != nil {
-		return ContainerState{
-			StartedAt:  &containerState.Running.StartedAt,
-			FinishedAt: nil,
-			ExitCode:   nil,
-		}
-	} else if containerState.Terminated != nil {
-		return ContainerState{
-			StartedAt:  &containerState.Terminated.StartedAt,
-			FinishedAt: &containerState.Terminated.FinishedAt,
-			ExitCode:   &containerState.Terminated.ExitCode,
-		}
+func NewWorkerStatus(barrierStartedAt *metav1.Time, workerStartedAt *metav1.Time) (WorkerStatus, error) {
+	if barrierStartedAt == nil && workerStartedAt == nil {
+		return WorkerStatus{}, fmt.Errorf("both barrierStartedAt and workerStartedAt are nil")
 	}
-	return ContainerState{
-		StartedAt:  nil,
-		FinishedAt: nil,
-		ExitCode:   nil,
+	if barrierStartedAt != nil && workerStartedAt != nil {
+		return WorkerStatus{}, fmt.Errorf("both barrierStartedAt and workerStartedAt are not nil")
 	}
+	return WorkerStatus{
+		BarrierStartedAt: barrierStartedAt,
+		WorkerStartedAt:  workerStartedAt,
+	}, nil
 }
 
-func getContainerStates(restartGroup jobset.RestartGroup, managedPods corev1.PodList) map[string]ContainerState {
-	containerStates := make(map[string]ContainerState)
+func (w WorkerStatus) IsWaiting() bool {
+	return w.BarrierStartedAt != nil && w.WorkerStartedAt == nil
+}
+
+func (w WorkerStatus) IsRunning() bool {
+	return w.BarrierStartedAt == nil && w.WorkerStartedAt != nil
+}
+
+func getWorkerStatuses(restartGroup jobset.RestartGroup, managedPods corev1.PodList) map[string]WorkerStatus {
+	workerStatuses := make(map[string]WorkerStatus, restartGroup.Spec.Size)
 	for _, pod := range managedPods.Items {
 		id := pod.GenerateName
+		// Must use annotation instead of barrier init container status for short term solution
+		if barrierStartedAtRaw, ok := pod.Annotations[jobset.BarrierStartedAtKey]; ok {
+			barrierStartedAt, err := time.Parse(time.RFC3339, barrierStartedAtRaw)
+			if err != nil {
+				continue
+			}
+			barrierStartedAtValue := metav1.NewTime(barrierStartedAt)
+			workerStatus, err := NewWorkerStatus(&barrierStartedAtValue, nil)
+			if err != nil {
+				continue
+			}
+			workerStatuses[id] = workerStatus
+			continue
+		}
 		for _, containerStatus := range pod.Status.ContainerStatuses {
 			if containerStatus.Name == restartGroup.Spec.Container {
-				containerState := NewContainerState(containerStatus.State)
-				// Check if container is running but the Pod is marked for instant deletion
-				// This is useful for the case of Node failure
-				if containerStatus.State.Running != nil && pod.DeletionTimestamp != nil && pod.DeletionGracePeriodSeconds != nil && *pod.DeletionGracePeriodSeconds == 0 {
-					containerState.FinishedAt = pod.DeletionTimestamp
-					containerState.ExitCode = ptr.To(int32(137))
+				if containerStatus.State.Running == nil {
+					continue
 				}
-				containerStates[id] = containerState
+				workerStatus, err := NewWorkerStatus(nil, &containerStatus.State.Running.StartedAt)
+				if err != nil {
+					break
+				}
+				workerStatuses[id] = workerStatus
 				break
 			}
 		}
 	}
-	return containerStates
+	return workerStatuses
 }
 
-func (r *RestartGroupReconciler) reconcile(ctx context.Context, restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
-	// Default RestartStartedAt to zero time
-	// This is useful because workload creation is treated as a restart
-	if restartGroup.Status.RestartStartedAt == nil {
-		restartGroup.Status.RestartStartedAt = &metav1.Time{}
+func allWorkersAreRunning(restartGroup jobset.RestartGroup, currentWorkerStatuses map[string]WorkerStatus) bool {
+	runningWorkerCount := 0
+	for _, currentWorkerStatus := range currentWorkerStatuses {
+		if currentWorkerStatus.IsRunning() {
+			runningWorkerCount++
+		}
 	}
-	if isGroupRestarting(restartGroup) {
-		return r.reconcileWhenRestarting(ctx, restartGroup, containerStates)
+	return runningWorkerCount == int(restartGroup.Spec.Size)
+}
+
+func allWorkersAreWaiting(restartGroup jobset.RestartGroup, currentWorkerStatuses map[string]WorkerStatus) bool {
+	workerWaitingCount := 0
+	for _, currentWorkerStatus := range currentWorkerStatuses {
+		if currentWorkerStatus.IsWaiting() {
+			workerWaitingCount++
+		}
 	}
-	return r.reconcileWhenRunning(ctx, restartGroup, containerStates)
+	return workerWaitingCount == int(restartGroup.Spec.Size)
 }
 
-func isGroupRestarting(restartGroup *jobset.RestartGroup) bool {
-	return restartGroup.Status.RestartFinishedAt == nil
-}
-
-func (r *RestartGroupReconciler) reconcileWhenRestarting(ctx context.Context, restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
-	log := ctrl.LoggerFrom(ctx)
-
-	runningContainerCount := int32(0)
-	var maximumStartedAt *metav1.Time
-	for _, containerState := range containerStates {
-		// Check if container started after group restart start
-		if containerState.StartedAt != nil && containerState.StartedAt.After(restartGroup.Status.RestartStartedAt.Time) {
-			runningContainerCount += 1
-			// Check if container was the last to start
-			if maximumStartedAt == nil || containerState.StartedAt.After(maximumStartedAt.Time) {
-				maximumStartedAt = containerState.StartedAt
+func getLiftBarrierStartedBeforeOrAt(currentWorkerStatuses map[string]WorkerStatus) *metav1.Time {
+	var liftBarrierStartedBeforeOrAt *metav1.Time
+	for _, currentWorkerStatus := range currentWorkerStatuses {
+		if currentWorkerStatus.IsWaiting() {
+			if liftBarrierStartedBeforeOrAt == nil || liftBarrierStartedBeforeOrAt.Before(currentWorkerStatus.BarrierStartedAt) {
+				liftBarrierStartedBeforeOrAt = currentWorkerStatus.BarrierStartedAt
 			}
 		}
 	}
-	if runningContainerCount > restartGroup.Spec.Size {
-		return fmt.Errorf("number of running target containers (after the group restart start) is bigger than the total number of target containers")
-	}
-	if runningContainerCount < restartGroup.Spec.Size {
-		return nil
-	}
-	if maximumStartedAt == nil {
-		return fmt.Errorf("maximum startedAt is nil even though the number of running target containers (after the group restart start) is equal to the total number of target containers")
-	}
-
-	// Finish current group restart
-	log.V(2).Info("Finishing current group restart", "RestartStartedAt", restartGroup.Status.RestartStartedAt, "RestartFinishedAt", maximumStartedAt)
-	restartGroup.Status.RestartFinishedAt = maximumStartedAt
-	return nil
+	return liftBarrierStartedBeforeOrAt
 }
 
-func (r *RestartGroupReconciler) reconcileWhenRunning(ctx context.Context, restartGroup *jobset.RestartGroup, containerStates map[string]ContainerState) error {
+func (r *RestartGroupReconciler) updateLiftBarrierStartedBeforeOrAtState(ctx context.Context, restartGroup *jobset.RestartGroup, liftBarrierStartedBeforeOrAt *metav1.Time) error {
 	log := ctrl.LoggerFrom(ctx)
-
-	var minimumFinishedAt *metav1.Time
-	for _, containerState := range containerStates {
-		// Check if container failed after last restart end
-		if containerState.FinishedAt != nil && containerState.FinishedAt.After(restartGroup.Status.RestartFinishedAt.Time) && containerState.ExitCode != nil && *containerState.ExitCode != 0 {
-			// Check if container was the first to fail
-			if minimumFinishedAt == nil || containerState.FinishedAt.Before(minimumFinishedAt) {
-				minimumFinishedAt = containerState.FinishedAt
-			}
-		}
-	}
-	if minimumFinishedAt == nil {
+	if restartGroup.Status.LiftBarrierStartedBeforeOrAt.Equal(liftBarrierStartedBeforeOrAt) {
 		return nil
 	}
-
-	// Start a new group restart
-	log.V(2).Info("Starting a new group restart", "RestartStartedAt", minimumFinishedAt, "RestartFinishedAt", nil)
-	restartGroup.Status.RestartStartedAt = minimumFinishedAt
-	restartGroup.Status.RestartFinishedAt = nil
-	return nil
-}
-
-func (r *RestartGroupReconciler) updateRestartGroupStatus(ctx context.Context, restartGroup *jobset.RestartGroup) error {
+	log.V(2).Info("Updating lift barrier started before or at state", "liftBarrierStartedBeforeOrAt", liftBarrierStartedBeforeOrAt)
+	restartGroup.Status.LiftBarrierStartedBeforeOrAt = liftBarrierStartedBeforeOrAt
 	return r.Status().Update(ctx, restartGroup)
 }
 
-func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, restartGroup *jobset.RestartGroup) error {
+func (r *RestartGroupReconciler) broadcastConfigMap(ctx context.Context, restartGroup *jobset.RestartGroup) error {
 	log := ctrl.LoggerFrom(ctx)
 
-	// No need to create / update broadcast ConfigMap if workload has never restarted
-	if restartGroup.Status.RestartStartedAt == nil || restartGroup.Status.RestartStartedAt.IsZero() {
-		return nil
+	desiredData := map[string]string{}
+	if restartGroup.Status.LiftBarrierStartedBeforeOrAt != nil {
+		desiredData[jobset.LiftBarrierStartedBeforeOrAtKey] = restartGroup.Status.LiftBarrierStartedBeforeOrAt.Format(time.RFC3339)
 	}
-
-	desiredData := map[string]string{
-		jobset.RestartStartedAtKey: restartGroup.Status.RestartStartedAt.Format(time.RFC3339),
+	if restartGroup.Status.RestartWorkerStartedBeforeOrAt != nil {
+		desiredData[jobset.RestartWorkerStartedBeforeOrAtKey] = restartGroup.Status.RestartWorkerStartedBeforeOrAt.Format(time.RFC3339)
 	}
 
 	// Get broadcast ConfigMap
@@ -339,7 +333,7 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 	broadcastConfigMap := childConfigMaps.Items[0]
 
 	// Skip update if nothing changed
-	if currentRestartStartedAt, ok := broadcastConfigMap.Data[jobset.RestartStartedAtKey]; ok && currentRestartStartedAt == desiredData[jobset.RestartStartedAtKey] {
+	if maps.Equal(broadcastConfigMap.Data, desiredData) {
 		return nil
 	}
 
@@ -354,4 +348,40 @@ func (r *RestartGroupReconciler) updateBroadcastConfigMap(ctx context.Context, r
 
 func getBroadcastConfigMapName(restartGroup *jobset.RestartGroup) string {
 	return restartGroup.Name + "-broadcast"
+}
+
+func newBarrier(restartGroup jobset.RestartGroup, currentWorkerStatuses map[string]WorkerStatus) bool {
+	if restartGroup.Status.LiftBarrierStartedBeforeOrAt == nil {
+		return false
+	}
+	currentLiftBarrierStartedBeforeOrAt := getLiftBarrierStartedBeforeOrAt(currentWorkerStatuses)
+	if currentLiftBarrierStartedBeforeOrAt == nil {
+		return false
+	}
+	return currentLiftBarrierStartedBeforeOrAt.After(restartGroup.Status.LiftBarrierStartedBeforeOrAt.Time)
+}
+
+func getRestartWorkerStartedBeforeOrAt(restartGroup jobset.RestartGroup, currentWorkerStatuses map[string]WorkerStatus) *metav1.Time {
+	var restartWorkerStartedBeforeOrAt *metav1.Time
+	for _, currentWorkerStatus := range currentWorkerStatuses {
+		if currentWorkerStatus.IsRunning() {
+			if restartWorkerStartedBeforeOrAt == nil || restartWorkerStartedBeforeOrAt.Before(currentWorkerStatus.WorkerStartedAt) {
+				restartWorkerStartedBeforeOrAt = currentWorkerStatus.WorkerStartedAt
+			}
+		}
+	}
+	if restartGroup.Status.RestartWorkerStartedBeforeOrAt != nil && (restartWorkerStartedBeforeOrAt == nil || restartWorkerStartedBeforeOrAt.Before(restartGroup.Status.RestartWorkerStartedBeforeOrAt)) {
+		restartWorkerStartedBeforeOrAt = restartGroup.Status.RestartWorkerStartedBeforeOrAt
+	}
+	return restartWorkerStartedBeforeOrAt
+}
+
+func (r *RestartGroupReconciler) updateRestartWorkerStartedBeforeOrAtState(ctx context.Context, restartGroup *jobset.RestartGroup, restartWorkerStartedBeforeOrAt *metav1.Time) error {
+	log := ctrl.LoggerFrom(ctx)
+	if restartGroup.Status.RestartWorkerStartedBeforeOrAt != nil && restartGroup.Status.RestartWorkerStartedBeforeOrAt.Equal(restartWorkerStartedBeforeOrAt) {
+		return nil
+	}
+	log.V(2).Info("Updating restart worker started before or at state", "restartWorkerStartedBeforeOrAt", restartWorkerStartedBeforeOrAt)
+	restartGroup.Status.RestartWorkerStartedBeforeOrAt = restartWorkerStartedBeforeOrAt
+	return r.Status().Update(ctx, restartGroup)
 }

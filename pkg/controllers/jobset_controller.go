@@ -281,7 +281,7 @@ func (r *JobSetReconciler) createRestartGroupIfNecessary(ctx context.Context, js
 	log := ctrl.LoggerFrom(ctx)
 
 	// RestartGroup is only necessary for workloads with in place restart enabled
-	targetContainerName, ok := js.Annotations[jobset.TargetContainerNameKey]
+	workerContainerName, ok := js.Annotations[jobset.WorkerContainerNameKey]
 	if !ok {
 		return nil
 	}
@@ -290,9 +290,9 @@ func (r *JobSetReconciler) createRestartGroupIfNecessary(ctx context.Context, js
 	// If the RestartGroup doesn't exist in the same namespace, create it
 	var restartGroup jobset.RestartGroup
 	restartGroupName := getRestartGroupName(js)
-	targetContainerCount, err := countContainers(js, targetContainerName)
+	workerContainerCount, err := countContainers(js, workerContainerName)
 	if err != nil {
-		return fmt.Errorf("failed to get target container '%s' count: %w", targetContainerName, err)
+		return fmt.Errorf("failed to get worker container '%s' count: %w", workerContainerName, err)
 	}
 	if err := r.Get(ctx, types.NamespacedName{Name: restartGroupName, Namespace: js.Namespace}, &restartGroup); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -307,8 +307,8 @@ func (r *JobSetReconciler) createRestartGroupIfNecessary(ctx context.Context, js
 				},
 			},
 			Spec: jobset.RestartGroupSpec{
-				Container: targetContainerName,
-				Size:      targetContainerCount,
+				Container: workerContainerName,
+				Size:      workerContainerCount,
 			},
 		}
 
@@ -910,11 +910,11 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	annotations[jobset.JobGroupIndexKey] = groupJobIndex(js, rjob.GroupName, rjob.Name, jobIdx)
 
 	// Apply RestartGroup labels / annotations if in place restart is enabled
-	if targetContainerName, ok := js.Annotations[jobset.TargetContainerNameKey]; ok {
+	if workerContainerName, ok := js.Annotations[jobset.WorkerContainerNameKey]; ok {
 		restartGroupName := getRestartGroupName(js)
 		labels[jobset.RestartGroupNameKey] = restartGroupName
 		annotations[jobset.RestartGroupNameKey] = restartGroupName
-		annotations[jobset.TargetContainerNameKey] = targetContainerName
+		annotations[jobset.WorkerContainerNameKey] = workerContainerName
 	}
 
 	// Apply coordinator annotation/label if a coordinator is defined in the JobSet spec.

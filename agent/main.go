@@ -18,10 +18,10 @@ import (
 )
 
 const (
-	criSocketPath       = "unix:///run/containerd/containerd.sock"
-	criPodUidKey        = "io.kubernetes.pod.uid"
-	criContainerNameKey = "io.kubernetes.container.name"
-	RestartStartedAtKey = "RestartStartedAt"
+	criSocketPath                     = "unix:///run/containerd/containerd.sock"
+	criPodUidKey                      = "io.kubernetes.pod.uid"
+	criContainerNameKey               = "io.kubernetes.container.name"
+	restartWorkerStartedBeforeOrAtKey = "restartWorkerStartedBeforeOrAt"
 )
 
 func main() {
@@ -29,8 +29,8 @@ func main() {
 	kubernetesClient := getKubernetesClient()
 	criClient, criConnection := getCriClient()
 	defer criConnection.Close()
-	podNamespace, podUid, restartGroupName, targetContainerName := getEnvVars()
-	watchBroadcastConfigMap(kubernetesClient, criClient, podNamespace, podUid, restartGroupName, targetContainerName)
+	podNamespace, podUid, restartGroupName, workerContainerName := getEnvVars()
+	watchBroadcastConfigMap(kubernetesClient, criClient, podNamespace, podUid, restartGroupName, workerContainerName)
 }
 
 func getKubernetesClient() *kubernetes.Clientset {
@@ -67,41 +67,41 @@ func getEnvVars() (string, string, string, string) {
 	if restartGroupName == "" {
 		log.Fatalf("ERROR: 'RESTART_GROUP_NAME' env var must be set")
 	}
-	targetContainerName := os.Getenv("TARGET_CONTAINER_NAME")
-	if targetContainerName == "" {
-		log.Fatalf("ERROR: 'TARGET_CONTAINER_NAME' env var must be set")
+	workerContainerName := os.Getenv("WORKER_CONTAINER_NAME")
+	if workerContainerName == "" {
+		log.Fatalf("ERROR: 'WORKER_CONTAINER_NAME' env var must be set")
 	}
-	return podNamespace, podUid, restartGroupName, targetContainerName
+	return podNamespace, podUid, restartGroupName, workerContainerName
 }
 
-func watchBroadcastConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, podNamespace string, podUid string, restartGroupName string, targetContainerName string) {
+func watchBroadcastConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, podNamespace string, podUid string, restartGroupName string, workerContainerName string) {
 	broadcastConfigMapEventChannel := getBroadcastConfigMapEventChannel(kubernetesClient, podNamespace, restartGroupName)
 	for event := range broadcastConfigMapEventChannel {
-		restartStartedAt, err := getRestartStartedAt(event)
+		restartWorkerStartedBeforeOrAt, err := getRestartWorkerStartedBeforeOrAt(event)
 		if err != nil {
 			log.Printf("ERROR: Failed to get group restart start timestamp: %v", err)
 			continue
 		}
-		log.Printf("INFO: group restart started at %s", restartStartedAt)
-		targetContainer, err := getContainer(criClient, podUid, targetContainerName)
+		log.Printf("DEBUG: restartWorkerStartedBeforeOrAt: %s", restartWorkerStartedBeforeOrAt)
+		workerContainer, err := getContainer(criClient, podUid, workerContainerName)
 		if err != nil {
-			log.Printf("ERROR: Failed to get target container '%s': %v", targetContainerName, err)
+			log.Printf("ERROR: Failed to get worker container '%s': %v", workerContainerName, err)
 			continue
 		}
-		containerStartedAt, err := getContainerStartedAt(criClient, targetContainer)
+		workerStartedAt, err := getContainerStartedAt(criClient, workerContainer)
 		if err != nil {
-			log.Printf("ERROR: Failed to get target container '%s' start timestamp: %v", targetContainerName, err)
+			log.Printf("ERROR: Failed to get worker container '%s' start timestamp: %v", workerContainerName, err)
 			continue
 		}
-		log.Printf("INFO: Target container '%s' started at %s", targetContainerName, containerStartedAt)
-		if containerStartedAt.After(restartStartedAt) {
-			log.Printf("INFO: Target container '%s' started after restart start. No op", targetContainerName)
+		log.Printf("DEBUG: workerStartedAt: %s", workerStartedAt)
+		if !(workerStartedAt.Before(restartWorkerStartedBeforeOrAt) || workerStartedAt.Equal(restartWorkerStartedBeforeOrAt)) {
+			log.Printf("INFO: Worker container '%s' started after restart worker started before or at. No op", workerContainerName)
 			continue
 		}
-		log.Printf("INFO: Killing target container '%s'", targetContainerName)
-		err = killContainer(criClient, targetContainer)
+		log.Printf("INFO: Killing worker container '%s'", workerContainerName)
+		err = killContainer(criClient, workerContainer)
 		if err != nil {
-			log.Printf("ERROR: Failed to kill target container '%s': %v", targetContainerName, err)
+			log.Printf("ERROR: Failed to kill worker container '%s': %v", workerContainerName, err)
 			continue
 		}
 	}
@@ -118,20 +118,20 @@ func getBroadcastConfigMapEventChannel(kubernetesClient *kubernetes.Clientset, p
 	return watcher.ResultChan()
 }
 
-func getRestartStartedAt(event watch.Event) (time.Time, error) {
+func getRestartWorkerStartedBeforeOrAt(event watch.Event) (time.Time, error) {
 	configMap, ok := event.Object.(*v1.ConfigMap)
 	if !ok {
 		return time.Time{}, fmt.Errorf("unexpected object type: %T", event.Object)
 	}
-	rawRestartStartedAt, ok := configMap.Data[RestartStartedAtKey]
+	rawRestartWorkerStartedBeforeOrAt, ok := configMap.Data[restartWorkerStartedBeforeOrAtKey]
 	if !ok {
-		return time.Time{}, fmt.Errorf("'%s' not found in ConfigMap data", RestartStartedAtKey)
+		return time.Time{}, fmt.Errorf("'%s' not found in ConfigMap data", restartWorkerStartedBeforeOrAtKey)
 	}
-	restartStartedAt, err := time.Parse(time.RFC3339, rawRestartStartedAt)
+	restartWorkerStartedBeforeOrAt, err := time.Parse(time.RFC3339, rawRestartWorkerStartedBeforeOrAt)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("failed to parse restart start timestamp: %v", err)
 	}
-	return restartStartedAt, nil
+	return restartWorkerStartedBeforeOrAt, nil
 }
 
 func getContainer(criClient runtimeapi.RuntimeServiceClient, podUid string, containerName string) (*runtimeapi.Container, error) {
@@ -171,7 +171,8 @@ func getContainerStartedAt(criClient runtimeapi.RuntimeServiceClient, container 
 		return time.Time{}, fmt.Errorf("startedAt field not specified in container status")
 	}
 	startTimestamp := time.Unix(0, rawStartTimestamp)
-	return startTimestamp, nil
+	startedAt := startTimestamp.Truncate(time.Second)
+	return startedAt, nil
 }
 
 func killContainer(criClient runtimeapi.RuntimeServiceClient, container *runtimeapi.Container) error {

@@ -27,9 +27,9 @@ class JobsetV1alpha2RestartGroupStatus(BaseModel):
     """
     RestartGroupStatus defines the observed state of RestartGroup
     """ # noqa: E501
-    restart_finished_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="restartFinishedAt")
-    restart_started_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="restartStartedAt")
-    __properties: ClassVar[List[str]] = ["restartFinishedAt", "restartStartedAt"]
+    lift_barrier_started_before_or_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="liftBarrierStartedBeforeOrAt")
+    restart_worker_started_before_or_at: Optional[datetime] = Field(default=None, description="Time is a wrapper around time.Time which supports correct marshaling to YAML and JSON.  Wrappers are provided for many of the factory methods that the time package offers.", alias="restartWorkerStartedBeforeOrAt")
+    __properties: ClassVar[List[str]] = ["liftBarrierStartedBeforeOrAt", "restartWorkerStartedBeforeOrAt"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -82,8 +82,8 @@ class JobsetV1alpha2RestartGroupStatus(BaseModel):
             return cls.model_validate(obj)
 
         _obj = cls.model_validate({
-            "restartFinishedAt": obj.get("restartFinishedAt"),
-            "restartStartedAt": obj.get("restartStartedAt")
+            "liftBarrierStartedBeforeOrAt": obj.get("liftBarrierStartedBeforeOrAt"),
+            "restartWorkerStartedBeforeOrAt": obj.get("restartWorkerStartedBeforeOrAt")
         })
         return _obj
 
