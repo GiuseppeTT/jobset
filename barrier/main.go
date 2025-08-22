@@ -19,7 +19,7 @@ import (
 const (
 	podNamespaceKey                 = "POD_NAMESPACE"
 	podNameKey                      = "POD_NAME"
-	barrierStartedAtKey             = "alpha.jobset.sigs.k8s.io/barrier-started-at"
+	workerStartedAtKey              = "alpha.jobset.sigs.k8s.io/worker-started-at"
 	liftBarrierStartedBeforeOrAtKey = "liftBarrierStartedBeforeOrAt"
 )
 
@@ -32,8 +32,9 @@ func runBarrier() {
 	log.Printf("INFO: Starting barrier")
 	kubernetesClient := getKubernetesClient()
 	podNamespace, podName, restartGroupName := getEnvironmentVariables()
-	barrierStartedAt := setBarrierStartedAtAnnotation(kubernetesClient, podNamespace, podName)
-	waitAtBarrier(kubernetesClient, podNamespace, podName, restartGroupName, barrierStartedAt)
+	removeWorkerStartedAtAnnotation(kubernetesClient, podNamespace, podName)
+	waitAtBarrier(kubernetesClient, podNamespace, podName, restartGroupName)
+	setWorkerStartedAtAnnotation(kubernetesClient, podNamespace, podName)
 }
 
 func getKubernetesClient() *kubernetes.Clientset {
@@ -65,14 +66,52 @@ func getEnvironmentVariables() (string, string, string) {
 
 }
 
-func setBarrierStartedAtAnnotation(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string) time.Time {
-	barrierStartedAt := time.Now().Truncate(time.Second).UTC()
-	rawBarrierStartedAt := barrierStartedAt.Format(time.RFC3339)
-	log.Printf("DEBUG: Setting '%s' annotation to '%s'", barrierStartedAtKey, rawBarrierStartedAt)
+func waitAtBarrier(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string, restartGroupName string) {
+	broadcastConfigMapEventChannel := getBroadcastConfigMapEventChannel(kubernetesClient, podNamespace, restartGroupName)
+	for event := range broadcastConfigMapEventChannel {
+		liftBarrierStartedBeforeOrAt, err := getLiftBarrierStartedBeforeOrAt(event)
+		if err != nil {
+			log.Printf("ERROR: Failed to get lift barrier started before or at timestamp: %v", err)
+			continue
+		}
+		log.Printf("DEBUG: liftBarrierStartedBeforeOrAt: %s", liftBarrierStartedBeforeOrAt)
+		barrierStartedAt, err := getBarrierStartedAt(kubernetesClient, podNamespace, podName)
+		if err != nil {
+			log.Printf("ERROR: Failed to get barrier started at timestamp: %v", err)
+			continue
+		}
+		log.Printf("DEBUG: barrierStartedAt: %s", barrierStartedAt)
+		if barrierStartedAt.Before(liftBarrierStartedBeforeOrAt) || barrierStartedAt.Equal(liftBarrierStartedBeforeOrAt) {
+			log.Printf("INFO: Lifting barrier")
+			return
+		}
+	}
+}
+
+func getBarrierStartedAt(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string) (time.Time, error) {
+	pod, err := kubernetesClient.CoreV1().Pods(podNamespace).Get(context.TODO(), podName, metav1.GetOptions{})
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to get Pod '%s/%s': %v", podNamespace, podName, err)
+	}
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.Name == "worker" {
+			if containerStatus.State.Running != nil {
+				return containerStatus.State.Running.StartedAt.Time, nil
+			}
+			return time.Time{}, fmt.Errorf("worker container not running in Pod '%s/%s'", podNamespace, podName)
+		}
+	}
+	return time.Time{}, fmt.Errorf("worker container not found in Pod '%s/%s'", podNamespace, podName)
+}
+
+func setWorkerStartedAtAnnotation(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string) {
+	workerStartedAt := time.Now().Truncate(time.Second).UTC()
+	rawWorkerStartedAt := workerStartedAt.Format(time.RFC3339)
+	log.Printf("DEBUG: Setting '%s' annotation to '%s'", workerStartedAtKey, rawWorkerStartedAt)
 	patch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{
-				barrierStartedAtKey: rawBarrierStartedAt,
+				workerStartedAtKey: rawWorkerStartedAt,
 			},
 		},
 	}
@@ -83,25 +122,6 @@ func setBarrierStartedAtAnnotation(kubernetesClient *kubernetes.Clientset, podNa
 	_, err = kubernetesClient.CoreV1().Pods(podNamespace).Patch(context.TODO(), podName, types.MergePatchType, patchBytes, metav1.PatchOptions{})
 	if err != nil {
 		log.Fatalf("ERROR: Failed to patch Pod '%s/%s': %v", podNamespace, podName, err)
-	}
-	return barrierStartedAt
-}
-
-func waitAtBarrier(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string, restartGroupName string, barrierStartedAt time.Time) {
-	broadcastConfigMapEventChannel := getBroadcastConfigMapEventChannel(kubernetesClient, podNamespace, restartGroupName)
-	for event := range broadcastConfigMapEventChannel {
-		liftBarrierStartedBeforeOrAt, err := getLiftBarrierStartedBeforeOrAt(event)
-		if err != nil {
-			log.Printf("ERROR: Failed to get lift barrier started before or at timestamp: %v", err)
-			continue
-		}
-		log.Printf("DEBUG: barrierStartedAt: %s", barrierStartedAt)
-		log.Printf("DEBUG: liftBarrierStartedBeforeOrAt: %s", liftBarrierStartedBeforeOrAt)
-		if barrierStartedAt.Before(liftBarrierStartedBeforeOrAt) || barrierStartedAt.Equal(liftBarrierStartedBeforeOrAt) {
-			log.Printf("INFO: Lifting barrier")
-			removeBarrierStartedAtAnnotation(kubernetesClient, podNamespace, podName)
-			return
-		}
 	}
 }
 
@@ -132,12 +152,12 @@ func getLiftBarrierStartedBeforeOrAt(event watch.Event) (time.Time, error) {
 	return liftBarrierStartedBeforeOrAt, nil
 }
 
-func removeBarrierStartedAtAnnotation(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string) {
-	log.Printf("DEBUG: Removing '%s' annotation", barrierStartedAtKey)
+func removeWorkerStartedAtAnnotation(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string) {
+	log.Printf("DEBUG: Removing '%s' annotation", workerStartedAtKey)
 	patch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]*string{
-				barrierStartedAtKey: nil,
+				workerStartedAtKey: nil,
 			},
 		},
 	}

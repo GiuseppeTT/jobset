@@ -23,6 +23,8 @@ const (
 	// TODO: Add description
 	WorkerContainerNameKey = "alpha.jobset.sigs.k8s.io/worker-container-name"
 	// TODO: Add description
+	WorkerStartedAtKey = "alpha.jobset.sigs.k8s.io/worker-started-at"
+	// TODO: Add description
 	BarrierStartedAtKey = "alpha.jobset.sigs.k8s.io/barrier-started-at"
 	// TODO: Add description
 	LiftBarrierStartedBeforeOrAtKey = "liftBarrierStartedBeforeOrAt"

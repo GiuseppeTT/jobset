@@ -14,4 +14,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: us-west4-docker.pkg.dev/giuseppett-gke-dev/benchmark-ar/jobset
-  newTag: 2025-08-22-00-00-48
+  newTag: 2025-08-22-16-31-18

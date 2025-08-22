@@ -22,6 +22,7 @@ const (
 	criPodUidKey                      = "io.kubernetes.pod.uid"
 	criContainerNameKey               = "io.kubernetes.container.name"
 	restartWorkerStartedBeforeOrAtKey = "restartWorkerStartedBeforeOrAt"
+	workerStartedAtKey                = "alpha.jobset.sigs.k8s.io/worker-started-at"
 )
 
 func main() {
@@ -29,8 +30,8 @@ func main() {
 	kubernetesClient := getKubernetesClient()
 	criClient, criConnection := getCriClient()
 	defer criConnection.Close()
-	podNamespace, podUid, restartGroupName, workerContainerName := getEnvVars()
-	watchBroadcastConfigMap(kubernetesClient, criClient, podNamespace, podUid, restartGroupName, workerContainerName)
+	podNamespace, podName, podUid, restartGroupName, workerContainerName := getEnvVars()
+	watchBroadcastConfigMap(kubernetesClient, criClient, podNamespace, podName, podUid, restartGroupName, workerContainerName)
 }
 
 func getKubernetesClient() *kubernetes.Clientset {
@@ -54,10 +55,14 @@ func getCriClient() (runtimeapi.RuntimeServiceClient, *grpc.ClientConn) {
 	return criClient, criConnection
 }
 
-func getEnvVars() (string, string, string, string) {
+func getEnvVars() (string, string, string, string, string) {
 	podNamespace := os.Getenv("POD_NAMESPACE")
 	if podNamespace == "" {
 		log.Fatalf("ERROR: 'POD_NAMESPACE' env var must be set")
+	}
+	podName := os.Getenv("POD_NAME")
+	if podName == "" {
+		log.Fatalf("ERROR: 'POD_NAME' env var must be set")
 	}
 	podUid := os.Getenv("POD_UID")
 	if podUid == "" {
@@ -71,10 +76,10 @@ func getEnvVars() (string, string, string, string) {
 	if workerContainerName == "" {
 		log.Fatalf("ERROR: 'WORKER_CONTAINER_NAME' env var must be set")
 	}
-	return podNamespace, podUid, restartGroupName, workerContainerName
+	return podNamespace, podName, podUid, restartGroupName, workerContainerName
 }
 
-func watchBroadcastConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, podNamespace string, podUid string, restartGroupName string, workerContainerName string) {
+func watchBroadcastConfigMap(kubernetesClient *kubernetes.Clientset, criClient runtimeapi.RuntimeServiceClient, podNamespace string, podName string, podUid string, restartGroupName string, workerContainerName string) {
 	broadcastConfigMapEventChannel := getBroadcastConfigMapEventChannel(kubernetesClient, podNamespace, restartGroupName)
 	for event := range broadcastConfigMapEventChannel {
 		restartWorkerStartedBeforeOrAt, err := getRestartWorkerStartedBeforeOrAt(event)
@@ -83,12 +88,7 @@ func watchBroadcastConfigMap(kubernetesClient *kubernetes.Clientset, criClient r
 			continue
 		}
 		log.Printf("DEBUG: restartWorkerStartedBeforeOrAt: %s", restartWorkerStartedBeforeOrAt)
-		workerContainer, err := getContainer(criClient, podUid, workerContainerName)
-		if err != nil {
-			log.Printf("ERROR: Failed to get worker container '%s': %v", workerContainerName, err)
-			continue
-		}
-		workerStartedAt, err := getContainerStartedAt(criClient, workerContainer)
+		workerStartedAt, err := getWorkerStartedAt(kubernetesClient, podNamespace, podName)
 		if err != nil {
 			log.Printf("ERROR: Failed to get worker container '%s' start timestamp: %v", workerContainerName, err)
 			continue
@@ -99,6 +99,11 @@ func watchBroadcastConfigMap(kubernetesClient *kubernetes.Clientset, criClient r
 			continue
 		}
 		log.Printf("INFO: Killing worker container '%s'", workerContainerName)
+		workerContainer, err := getContainer(criClient, podUid, workerContainerName)
+		if err != nil {
+			log.Printf("ERROR: Failed to get worker container '%s': %v", workerContainerName, err)
+			continue
+		}
 		err = killContainer(criClient, workerContainer)
 		if err != nil {
 			log.Printf("ERROR: Failed to kill worker container '%s': %v", workerContainerName, err)
@@ -134,6 +139,22 @@ func getRestartWorkerStartedBeforeOrAt(event watch.Event) (time.Time, error) {
 	return restartWorkerStartedBeforeOrAt, nil
 }
 
+func getWorkerStartedAt(kubernetesClient *kubernetes.Clientset, podNamespace string, podName string) (time.Time, error) {
+	pod, err := kubernetesClient.CoreV1().Pods(podNamespace).Get(context.TODO(), podName, metav1.GetOptions{})
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to get Pod '%s/%s': %v", podNamespace, podName, err)
+	}
+	rawWorkerStartedAt, ok := pod.Annotations[workerStartedAtKey]
+	if !ok {
+		return time.Time{}, fmt.Errorf("'%s' not found in Pod annotations", workerStartedAtKey)
+	}
+	workerStartedAt, err := time.Parse(time.RFC3339, rawWorkerStartedAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to parse worker start timestamp: %v", err)
+	}
+	return workerStartedAt, nil
+}
+
 func getContainer(criClient runtimeapi.RuntimeServiceClient, podUid string, containerName string) (*runtimeapi.Container, error) {
 	listResponse, err := criClient.ListContainers(context.TODO(), &runtimeapi.ListContainersRequest{
 		Filter: &runtimeapi.ContainerFilter{
@@ -159,21 +180,21 @@ func getContainer(criClient runtimeapi.RuntimeServiceClient, podUid string, cont
 	return container, nil
 }
 
-func getContainerStartedAt(criClient runtimeapi.RuntimeServiceClient, container *runtimeapi.Container) (time.Time, error) {
-	statusResponse, err := criClient.ContainerStatus(context.TODO(), &runtimeapi.ContainerStatusRequest{
-		ContainerId: container.Id,
-	})
-	if err != nil {
-		return time.Time{}, fmt.Errorf("failed to get container status: %v", err)
-	}
-	rawStartTimestamp := statusResponse.Status.StartedAt
-	if rawStartTimestamp == 0 {
-		return time.Time{}, fmt.Errorf("startedAt field not specified in container status")
-	}
-	startTimestamp := time.Unix(0, rawStartTimestamp)
-	startedAt := startTimestamp.Truncate(time.Second)
-	return startedAt, nil
-}
+// func getContainerStartedAt(criClient runtimeapi.RuntimeServiceClient, container *runtimeapi.Container) (time.Time, error) {
+// 	statusResponse, err := criClient.ContainerStatus(context.TODO(), &runtimeapi.ContainerStatusRequest{
+// 		ContainerId: container.Id,
+// 	})
+// 	if err != nil {
+// 		return time.Time{}, fmt.Errorf("failed to get container status: %v", err)
+// 	}
+// 	rawStartTimestamp := statusResponse.Status.StartedAt
+// 	if rawStartTimestamp == 0 {
+// 		return time.Time{}, fmt.Errorf("startedAt field not specified in container status")
+// 	}
+// 	startTimestamp := time.Unix(0, rawStartTimestamp)
+// 	startedAt := startTimestamp.Truncate(time.Second)
+// 	return startedAt, nil
+// }
 
 func killContainer(criClient runtimeapi.RuntimeServiceClient, container *runtimeapi.Container) error {
 	_, err := criClient.StopContainer(context.TODO(), &runtimeapi.StopContainerRequest{

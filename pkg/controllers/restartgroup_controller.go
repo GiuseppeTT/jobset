@@ -213,26 +213,24 @@ func getWorkerStatuses(restartGroup jobset.RestartGroup, managedPods corev1.PodL
 	workerStatuses := make(map[string]WorkerStatus, restartGroup.Spec.Size)
 	for _, pod := range managedPods.Items {
 		id := pod.GenerateName
-		// Must use annotation instead of barrier init container status for short term solution
-		if barrierStartedAtRaw, ok := pod.Annotations[jobset.BarrierStartedAtKey]; ok {
-			barrierStartedAt, err := time.Parse(time.RFC3339, barrierStartedAtRaw)
-			if err != nil {
-				continue
-			}
-			barrierStartedAtValue := metav1.NewTime(barrierStartedAt)
-			workerStatus, err := NewWorkerStatus(&barrierStartedAtValue, nil)
-			if err != nil {
-				continue
-			}
-			workerStatuses[id] = workerStatus
-			continue
-		}
 		for _, containerStatus := range pod.Status.ContainerStatuses {
 			if containerStatus.Name == restartGroup.Spec.Container {
 				if containerStatus.State.Running == nil {
-					continue
+					break
 				}
-				workerStatus, err := NewWorkerStatus(nil, &containerStatus.State.Running.StartedAt)
+				if rawWorkerStartedAt, ok := pod.Annotations[jobset.WorkerStartedAtKey]; ok {
+					workerStartedAt, err := time.Parse(time.RFC3339, rawWorkerStartedAt)
+					if err == nil && (workerStartedAt.After(containerStatus.State.Running.StartedAt.Time) || workerStartedAt.Equal(containerStatus.State.Running.StartedAt.Time)) {
+						workerStartedAtValue := metav1.NewTime(workerStartedAt)
+						workerStatus, err := NewWorkerStatus(nil, &workerStartedAtValue)
+						if err != nil {
+							break
+						}
+						workerStatuses[id] = workerStatus
+						break
+					}
+				}
+				workerStatus, err := NewWorkerStatus(&containerStatus.State.Running.StartedAt, nil)
 				if err != nil {
 					break
 				}
