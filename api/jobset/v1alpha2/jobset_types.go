@@ -74,6 +74,11 @@ const (
 	// If a ReplicatedJob is part of a group, then its child jobs and pods have this
 	// label/annotation ranging from 0 to annotations[GroupReplicasKey] - 1
 	JobGroupIndexKey string = "jobset.sigs.k8s.io/job-group-index"
+
+	// Restart group
+	RestartGroupNameKey        string = "alpha.jobset.sigs.k8s.io/restart-group-name"
+	GenerationConfigMapNameKey string = "alpha.jobset.sigs.k8s.io/generation-configmap-name"
+	BroadcastConfigMapNameKey  string = "alpha.jobset.sigs.k8s.io/broadcast-configmap-name"
 )
 
 type JobSetConditionType string

@@ -100,6 +100,7 @@ func NewJobSetReconciler(client client.Client, scheme *runtime.Scheme, record re
 //+kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=batch,resources=jobs/status,verbs=get;patch;update
 //+kubebuilder:rbac:groups=core,resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -146,6 +147,12 @@ func (r *JobSetReconciler) reconcile(ctx context.Context, js *jobset.JobSet, upd
 	}
 
 	log.V(2).Info("Reconciling JobSet")
+
+	// If in place restart is enabled, create restart group ConfigMaps for the JobSet
+	if err := r.createRestartGroupConfigMapsIfNecessary(ctx, js); err != nil {
+		log.Error(err, "creating restart group Configmaps")
+		return ctrl.Result{}, err
+	}
 
 	// Get Jobs owned by JobSet.
 	ownedJobs, err := r.getChildJobs(ctx, js)
@@ -247,6 +254,82 @@ func SetupJobSetIndexes(ctx context.Context, indexer client.FieldIndexer) error 
 		}
 		return []string{owner.Name}
 	})
+}
+
+func (r *JobSetReconciler) createRestartGroupConfigMapsIfNecessary(ctx context.Context, js *jobset.JobSet) error {
+	log := ctrl.LoggerFrom(ctx)
+
+	// Restart group ConfigMaps are only necessary for workloads with in place restart enabled
+	restartGroupName, ok := js.Annotations[jobset.RestartGroupNameKey]
+	if !ok {
+		return nil
+	}
+
+	// Check if generation ConfigMap already exists.
+	// If the generation ConfigMap doesn't exist in the same namespace, create it.
+	var generationConfigMap corev1.ConfigMap
+	generationConfigMapName := restartGroupName + "-generation"
+	if err := r.Get(ctx, types.NamespacedName{Name: generationConfigMapName, Namespace: js.Namespace}, &generationConfigMap); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		generationConfigMap := corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      generationConfigMapName,
+				Namespace: js.Namespace,
+				Labels: map[string]string{
+					jobset.JobSetNameKey:       js.Name,
+					jobset.RestartGroupNameKey: restartGroupName,
+				},
+			},
+			Data: map[string]string{},
+		}
+
+		// Set controller owner reference for garbage collection and reconcilation.
+		if err := ctrl.SetControllerReference(js, &generationConfigMap, r.Scheme); err != nil {
+			return err
+		}
+
+		// Create generation ConfigMap.
+		if err := r.Create(ctx, &generationConfigMap); err != nil {
+			r.Record.Eventf(js, corev1.EventTypeWarning, "GenerationConfigMapCreationFailed", err.Error()) // TODO: Constant
+			return err
+		}
+		log.V(2).Info("successfully created generation configmap", "configmap", klog.KObj(&generationConfigMap))
+	}
+
+	// Check if broadcast ConfigMap already exists.
+	// If the broadcast ConfigMap doesn't exist in the same namespace, create it.
+	var broadcastConfigMap corev1.ConfigMap
+	broadcastConfigMapName := restartGroupName + "-broadcast"
+	if err := r.Get(ctx, types.NamespacedName{Name: broadcastConfigMapName, Namespace: js.Namespace}, &broadcastConfigMap); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		broadcastConfigMap := corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      broadcastConfigMapName,
+				Namespace: js.Namespace,
+			},
+			Data: map[string]string{
+				"target":  "0",
+				"restart": "0",
+			},
+		}
+
+		// Set controller owner reference for garbage collection and reconcilation.
+		if err := ctrl.SetControllerReference(js, &broadcastConfigMap, r.Scheme); err != nil {
+			return err
+		}
+
+		// Create broadcast ConfigMap.
+		if err := r.Create(ctx, &broadcastConfigMap); err != nil {
+			r.Record.Eventf(js, corev1.EventTypeWarning, "BroadcastConfigMapCreationFailed", err.Error()) // TODO: Constant
+			return err
+		}
+		log.V(2).Info("successfully created broadcast configmap", "configmap", klog.KObj(&broadcastConfigMap))
+	}
+	return nil
 }
 
 // updateJobSetStatus will update the JobSet status if updateStatusOpts requires it,
@@ -795,6 +878,12 @@ func labelAndAnnotateObject(obj metav1.Object, js *jobset.JobSet, rjob *jobset.R
 	annotations[jobset.GroupNameKey] = rjob.GroupName
 	annotations[jobset.GroupReplicasKey] = groupReplicas(js, rjob.GroupName)
 	annotations[jobset.JobGroupIndexKey] = groupJobIndex(js, rjob.GroupName, rjob.Name, jobIdx)
+
+	// Apply restart group labels / annotations if in place restart is enabled
+	if restartGroupName, ok := js.Annotations[jobset.RestartGroupNameKey]; ok {
+		annotations[jobset.GenerationConfigMapNameKey] = restartGroupName + "-generation" // TODO: Function
+		annotations[jobset.BroadcastConfigMapNameKey] = restartGroupName + "-broadcast"   // TODO: Function
+	}
 
 	// Apply coordinator annotation/label if a coordinator is defined in the JobSet spec.
 	if js.Spec.Coordinator != nil {

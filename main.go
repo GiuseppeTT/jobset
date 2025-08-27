@@ -232,6 +232,13 @@ func setupControllers(mgr ctrl.Manager, certsReady chan struct{}) {
 		os.Exit(1)
 	}
 
+	// Set up configmap reconciler.
+	configMapController := controllers.NewConfigMapReconciler(mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorderFor("configmap"))
+	if err := configMapController.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ConfigMap")
+		os.Exit(1)
+	}
+
 	// Set up JobSet validating/defaulting webhook.
 	jobSetWebHook, err := webhooks.NewJobSetWebhook(mgr.GetClient())
 	if err != nil {

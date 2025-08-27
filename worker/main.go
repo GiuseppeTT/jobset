@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -20,7 +19,8 @@ import (
 
 const (
 	podNamespaceKey            = "POD_NAMESPACE"
-	podNameKey                 = "POD_NAME"
+	jobGlobalIndexKey          = "JOB_GLOBAL_INDEX"
+	podIndexKey                = "POD_INDEX"
 	generationConfigMapNameKey = "GENERATION_CONFIGMAP_NAME"
 	broadcastConfigMapNameKey  = "BROADCAST_CONFIGMAP_NAME"
 	targetKey                  = "target"
@@ -31,8 +31,8 @@ const (
 
 func main() {
 	kubernetesClient := getKubernetesClient()
-	podNamespace, podName, generationConfigMapName, broadcastConfigMapName := getEnvironmentVariables()
-	workerId := getWorkerId(podName)
+	podNamespace, jobGlobalIndex, podIndex, generationConfigMapName, broadcastConfigMapName := getEnvironmentVariables()
+	workerId := jobGlobalIndex + "-" + podIndex
 	generation := runBarrier(kubernetesClient, podNamespace, broadcastConfigMapName, generationConfigMapName, workerId)
 	go runAgent(kubernetesClient, podNamespace, broadcastConfigMapName, generation)
 	runWorker()
@@ -51,18 +51,23 @@ func getKubernetesClient() *kubernetes.Clientset {
 	return kubernetesClient
 }
 
-func getEnvironmentVariables() (string, string, string, string) {
+func getEnvironmentVariables() (string, string, string, string, string) {
 	log.Printf("INFO: Getting environment variables")
 	podNamespace := os.Getenv(podNamespaceKey)
 	if podNamespace == "" {
 		log.Fatalf("ERROR: '%s' environment variable must be set", podNamespaceKey)
 	}
 	log.Printf("DEBUG: podNamespace=%s", podNamespace)
-	podName := os.Getenv(podNameKey)
-	if podName == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", podNameKey)
+	jobGlobalIndex := os.Getenv(jobGlobalIndexKey)
+	if jobGlobalIndex == "" {
+		log.Fatalf("ERROR: '%s' environment variable must be set", jobGlobalIndexKey)
 	}
-	log.Printf("DEBUG: podName=%s", podName)
+	log.Printf("DEBUG: jobGlobalIndex=%s", jobGlobalIndex)
+	podIndex := os.Getenv(podIndexKey)
+	if podIndex == "" {
+		log.Fatalf("ERROR: '%s' environment variable must be set", podIndexKey)
+	}
+	log.Printf("DEBUG: podIndex=%s", podIndex)
 	generationConfigMapName := os.Getenv(generationConfigMapNameKey)
 	if generationConfigMapName == "" {
 		log.Fatalf("ERROR: '%s' environment variable must be set", generationConfigMapNameKey)
@@ -73,20 +78,8 @@ func getEnvironmentVariables() (string, string, string, string) {
 		log.Fatalf("ERROR: '%s' environment variable must be set", broadcastConfigMapNameKey)
 	}
 	log.Printf("DEBUG: broadcastConfigMapName=%s", broadcastConfigMapName)
-	return podNamespace, podName, generationConfigMapName, broadcastConfigMapName
+	return podNamespace, jobGlobalIndex, podIndex, generationConfigMapName, broadcastConfigMapName
 
-}
-
-// Extract pod.metadata.generateName prefix from pod.metadata.name
-func getWorkerId(podName string) string {
-	log.Printf("INFO: Getting worker id")
-	lastIndex := strings.LastIndex(podName, "-")
-	if lastIndex == -1 {
-		log.Fatalf("ERROR: Invalid pod name: %s", podName)
-	}
-	workerId := podName[:lastIndex]
-	log.Printf("DEBUG: workerId=%s", workerId)
-	return workerId
 }
 
 func runBarrier(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string, generationConfigMapName string, workerId string) int {
@@ -107,16 +100,14 @@ func getTarget(kubernetesClient *kubernetes.Clientset, namespace string, broadca
 	log.Printf("INFO: Getting target")
 	broadcastConfigMap, err := kubernetesClient.CoreV1().ConfigMaps(namespace).Get(context.TODO(), broadcastConfigMapName, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
-		log.Printf("WARN: Broadcast ConfigMap '%s/%s' not found, defaulting target to '0'", namespace, broadcastConfigMapName)
-		return 0
+		log.Fatalf("ERROR: Broadcast ConfigMap '%s/%s' not found", namespace, broadcastConfigMapName)
 	}
 	if err != nil {
 		log.Fatalf("ERROR: Failed to get broadcast ConfigMap '%s/%s': %v", namespace, broadcastConfigMapName, err)
 	}
 	rawTarget, ok := broadcastConfigMap.Data[targetKey]
 	if !ok {
-		log.Printf("WARN: '%s' key not found in broadcast ConfigMap '%s/%s', defaulting target to '0'", targetKey, namespace, broadcastConfigMapName)
-		return 0
+		log.Fatalf("ERROR: '%s' key not found in broadcast ConfigMap '%s/%s'", targetKey, namespace, broadcastConfigMapName)
 	}
 	target, err := strconv.Atoi(rawTarget)
 	if err != nil {
@@ -137,10 +128,18 @@ func patchGeneration(kubernetesClient *kubernetes.Clientset, namespace string, g
 	if err != nil {
 		log.Fatalf("ERROR: Failed to marshal patch payload: %v", err)
 	}
-	_, err = kubernetesClient.CoreV1().ConfigMaps(namespace).Patch(context.TODO(), generationConfigMapName, types.MergePatchType, patchBytes, metav1.PatchOptions{})
-	if err != nil {
-		log.Fatalf("ERROR: Failed to patch generation ConfigMap '%s/%s': %v", namespace, generationConfigMapName, err)
+	const maxRetries = 5
+	var lastErr error
+	for i := range maxRetries {
+		_, err = kubernetesClient.CoreV1().ConfigMaps(namespace).Patch(context.TODO(), generationConfigMapName, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
+		if err == nil {
+			return
+		}
+		lastErr = err
+		log.Printf("WARN: Failed to patch generation ConfigMap '%s/%s' on attempt %d/%d: %v", namespace, generationConfigMapName, i+1, maxRetries, err)
+		time.Sleep(1 * time.Second)
 	}
+	log.Fatalf("ERROR: Failed to patch generation ConfigMap '%s/%s' after %d attempts: %v", namespace, generationConfigMapName, maxRetries, lastErr)
 }
 
 // Wait until generation <= broadcastConfigMap.data.target
