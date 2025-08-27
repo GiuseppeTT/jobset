@@ -9,7 +9,6 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
@@ -25,17 +24,15 @@ const (
 	broadcastConfigMapNameKey  = "BROADCAST_CONFIGMAP_NAME"
 	targetKey                  = "target"
 	restartKey                 = "restart"
-	timeoutSeconds             = 1200
-	pollIntervalSeconds        = 1
+	watchTimeoutSeconds        = 1200
+	filePollIntervalSeconds    = 1
 )
 
 func main() {
 	kubernetesClient := getKubernetesClient()
 	podNamespace, jobGlobalIndex, podIndex, generationConfigMapName, broadcastConfigMapName := getEnvironmentVariables()
 	workerId := jobGlobalIndex + "-" + podIndex
-	generation := runBarrier(kubernetesClient, podNamespace, broadcastConfigMapName, generationConfigMapName, workerId)
-	go runAgent(kubernetesClient, podNamespace, broadcastConfigMapName, generation)
-	runWorker()
+	run(kubernetesClient, podNamespace, broadcastConfigMapName, generationConfigMapName, workerId)
 }
 
 func getKubernetesClient() *kubernetes.Clientset {
@@ -82,43 +79,66 @@ func getEnvironmentVariables() (string, string, string, string, string) {
 
 }
 
-func runBarrier(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string, generationConfigMapName string, workerId string) int {
-	log.Printf("INFO: Starting barrier")
-	target := getTarget(kubernetesClient, namespace, broadcastConfigMapName)
-	log.Printf("DEBUG: target=%d", target)
-	generation := target + 1
-	log.Printf("DEBUG: generation=%d", generation)
-	patchGeneration(kubernetesClient, namespace, generationConfigMapName, workerId, generation)
-	log.Printf("DEBUG: Patched")
-	waitForBarrierLift(kubernetesClient, namespace, broadcastConfigMapName, generation)
-	log.Printf("INFO: Lifted barrier")
-	return generation
-}
-
-// Get broadcastConfigMap.data.target
-func getTarget(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string) int {
-	log.Printf("INFO: Getting target")
-	broadcastConfigMap, err := kubernetesClient.CoreV1().ConfigMaps(namespace).Get(context.TODO(), broadcastConfigMapName, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		log.Fatalf("ERROR: Broadcast ConfigMap '%s/%s' not found", namespace, broadcastConfigMapName)
+func run(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string, generationConfigMapName string, workerId string) {
+	log.Printf("INFO: Running")
+	isBarrierUp := true
+	isGenerationPatched := false
+	generation := -1
+	for {
+		log.Printf("INFO: Creating watch for broadcast ConfigMap '%s/%s'", namespace, broadcastConfigMapName)
+		timeout := int64(watchTimeoutSeconds)
+		watcher, err := kubernetesClient.CoreV1().ConfigMaps(namespace).Watch(context.TODO(), metav1.ListOptions{
+			FieldSelector:  "metadata.name=" + broadcastConfigMapName,
+			TimeoutSeconds: &timeout,
+		})
+		if err != nil {
+			log.Fatalf("ERROR: Failed to watch broadcast ConfigMap '%s/%s': %v", namespace, broadcastConfigMapName, err)
+		}
+		for event := range watcher.ResultChan() {
+			log.Printf("INFO: New watch event")
+			if event.Type == watch.Error {
+				log.Printf("WARN: Watch for ConfigMap '%s/%s' returned an error, restarting watch: %v", namespace, broadcastConfigMapName, event.Object)
+				break
+			}
+			broadcastConfigMap, ok := event.Object.(*v1.ConfigMap)
+			if !ok {
+				log.Printf("WARN: Watch event for '%s/%s' is not a ConfigMap, but %T", namespace, broadcastConfigMapName, event.Object)
+				continue
+			}
+			if event.Type == watch.Modified || event.Type == watch.Added {
+				if !isGenerationPatched {
+					generation = patchGeneration(kubernetesClient, broadcastConfigMap, namespace, generationConfigMapName, workerId)
+					isGenerationPatched = true
+				}
+				if mustRestart(broadcastConfigMap, generation) {
+					log.Printf("INFO: Restarting worker")
+					os.Exit(42)
+				}
+				if isBarrierUp && shouldLiftBarrier(broadcastConfigMap, generation) {
+					log.Printf("INFO: Lifting barrier")
+					go runWorker()
+					isBarrierUp = false
+				}
+			}
+		}
+		log.Printf("WARN: Watch for broadcast ConfigMap '%s/%s' closed, restarting watch", namespace, broadcastConfigMapName)
 	}
-	if err != nil {
-		log.Fatalf("ERROR: Failed to get broadcast ConfigMap '%s/%s': %v", namespace, broadcastConfigMapName, err)
-	}
-	rawTarget, ok := broadcastConfigMap.Data[targetKey]
-	if !ok {
-		log.Fatalf("ERROR: '%s' key not found in broadcast ConfigMap '%s/%s'", targetKey, namespace, broadcastConfigMapName)
-	}
-	target, err := strconv.Atoi(rawTarget)
-	if err != nil {
-		log.Fatalf("ERROR: Failed to parse target '%s' from broadcast ConfigMap '%s/%s': %v", rawTarget, namespace, broadcastConfigMapName, err)
-	}
-	return target
 }
 
 // Set generationConfigMap.data[workerId] = generation
-func patchGeneration(kubernetesClient *kubernetes.Clientset, namespace string, generationConfigMapName string, workerId string, generation int) {
+func patchGeneration(kubernetesClient *kubernetes.Clientset, broadcastConfigMap *v1.ConfigMap, namespace string, generationConfigMapName string, workerId string) int {
 	log.Printf("INFO: Patching generation")
+	rawTarget, ok := broadcastConfigMap.Data[targetKey]
+	if !ok {
+		log.Fatalf("ERROR: '%s' key not found in broadcast ConfigMap '%s/%s'", targetKey, broadcastConfigMap.Namespace, broadcastConfigMap.Name)
+	}
+	target, err := strconv.Atoi(rawTarget)
+	if err != nil {
+		log.Fatalf("ERROR: Failed to parse target '%s' from broadcast ConfigMap '%s/%s': %v", rawTarget, broadcastConfigMap.Namespace, broadcastConfigMap.Name, err)
+	}
+	log.Printf("DEBUG: target=%d", target)
+	generation := target + 1
+	log.Printf("DEBUG: generation=%d", generation)
 	patchPayload := map[string]any{
 		"data": map[string]string{
 			workerId: strconv.Itoa(generation),
@@ -133,104 +153,44 @@ func patchGeneration(kubernetesClient *kubernetes.Clientset, namespace string, g
 	for i := range maxRetries {
 		_, err = kubernetesClient.CoreV1().ConfigMaps(namespace).Patch(context.TODO(), generationConfigMapName, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
 		if err == nil {
-			return
+			return generation
 		}
 		lastErr = err
 		log.Printf("WARN: Failed to patch generation ConfigMap '%s/%s' on attempt %d/%d: %v", namespace, generationConfigMapName, i+1, maxRetries, err)
 		time.Sleep(1 * time.Second)
 	}
 	log.Fatalf("ERROR: Failed to patch generation ConfigMap '%s/%s' after %d attempts: %v", namespace, generationConfigMapName, maxRetries, lastErr)
+	return -1
 }
 
-// Wait until generation <= broadcastConfigMap.data.target
-func waitForBarrierLift(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string, generation int) {
-	log.Printf("INFO: Waiting for barrier lift")
-	for {
-		timeout := int64(timeoutSeconds)
-		watcher, err := kubernetesClient.CoreV1().ConfigMaps(namespace).Watch(context.TODO(), metav1.ListOptions{
-			FieldSelector:  "metadata.name=" + broadcastConfigMapName,
-			TimeoutSeconds: &timeout,
-		})
-		if err != nil {
-			log.Fatalf("ERROR: Failed to watch broadcast ConfigMap '%s/%s': %v", namespace, broadcastConfigMapName, err)
-		}
-		for event := range watcher.ResultChan() {
-			if event.Type == watch.Error {
-				log.Printf("WARN: Watch for ConfigMap '%s/%s' returned an error, restarting watch: %v", namespace, broadcastConfigMapName, event.Object)
-				break
-			}
-			broadcastConfigMap, ok := event.Object.(*v1.ConfigMap)
-			if !ok {
-				log.Printf("WARN: Watch event for '%s/%s' was not a ConfigMap, but %T", namespace, broadcastConfigMapName, event.Object)
-				continue
-			}
-			if event.Type == watch.Modified || event.Type == watch.Added {
-				rawTarget, ok := broadcastConfigMap.Data[targetKey]
-				if !ok {
-					continue
-				}
-				target, err := strconv.Atoi(rawTarget)
-				if err != nil {
-					log.Printf("WARN: Failed to parse target '%s' from broadcast ConfigMap '%s/%s': %v", rawTarget, namespace, broadcastConfigMapName, err)
-					continue
-				}
-				log.Printf("DEBUG: target=%d", target)
-				if generation <= target {
-					watcher.Stop()
-					return
-				}
-			}
-		}
-		log.Printf("WARN: Watch for broadcast ConfigMap '%s/%s' closed, restarting watch", namespace, broadcastConfigMapName)
+func mustRestart(broadcastConfigMap *v1.ConfigMap, generation int) bool {
+	log.Printf("INFO: Checking if must restart")
+	rawRestart, ok := broadcastConfigMap.Data[restartKey]
+	if !ok {
+		log.Fatalf("ERROR: '%s' key not found in broadcast ConfigMap '%s/%s'", restartKey, broadcastConfigMap.Namespace, broadcastConfigMap.Name)
 	}
-}
-
-func runAgent(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string, generation int) {
-	log.Printf("INFO: Starting agent")
-	waitForRestart(kubernetesClient, namespace, broadcastConfigMapName, generation)
-}
-
-// Fail program if generation <= broadcastConfigMap.data.restart
-func waitForRestart(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string, generation int) {
-	log.Printf("INFO: Waiting for restart")
-	for {
-		timeout := int64(timeoutSeconds)
-		watcher, err := kubernetesClient.CoreV1().ConfigMaps(namespace).Watch(context.TODO(), metav1.ListOptions{
-			FieldSelector:  "metadata.name=" + broadcastConfigMapName,
-			TimeoutSeconds: &timeout,
-		})
-		if err != nil {
-			log.Fatalf("ERROR: Failed to watch broadcast ConfigMap '%s/%s': %v", namespace, broadcastConfigMapName, err)
-		}
-		for event := range watcher.ResultChan() {
-			if event.Type == watch.Error {
-				log.Printf("WARN: Watch for ConfigMap '%s/%s' returned an error, restarting watch: %v", namespace, broadcastConfigMapName, event.Object)
-				break
-			}
-			broadcastConfigMap, ok := event.Object.(*v1.ConfigMap)
-			if !ok {
-				log.Printf("WARN: Watch event for '%s/%s' was not a ConfigMap, but %T", namespace, broadcastConfigMapName, event.Object)
-				continue
-			}
-			if event.Type == watch.Modified || event.Type == watch.Added {
-				rawRestart, ok := broadcastConfigMap.Data[restartKey]
-				if !ok {
-					continue
-				}
-				restart, err := strconv.Atoi(rawRestart)
-				if err != nil {
-					log.Printf("WARN: Failed to parse restart '%s' from broadcast ConfigMap '%s/%s': %v", rawRestart, namespace, broadcastConfigMapName, err)
-					continue
-				}
-				log.Printf("DEBUG: restart=%d", restart)
-				if generation <= restart {
-					log.Printf("INFO: Restart triggered for generation %d (restart target %d). Terminating.", generation, restart)
-					os.Exit(42)
-				}
-			}
-		}
-		log.Printf("WARN: Watch for broadcast ConfigMap '%s/%s' closed, restarting watch", namespace, broadcastConfigMapName)
+	restart, err := strconv.Atoi(rawRestart)
+	if err != nil {
+		log.Fatalf("ERROR: Failed to parse restart '%s' from broadcast ConfigMap '%s/%s': %v", rawRestart, broadcastConfigMap.Namespace, broadcastConfigMap.Name, err)
 	}
+	log.Printf("DEBUG: restart=%d", restart)
+	log.Printf("DEBUG: generation=%d", generation)
+	return generation <= restart
+}
+
+func shouldLiftBarrier(broadcastConfigMap *v1.ConfigMap, generation int) bool {
+	log.Printf("INFO: Checking if should lift barrier")
+	rawTarget, ok := broadcastConfigMap.Data[targetKey]
+	if !ok {
+		log.Fatalf("ERROR: '%s' key not found in broadcast ConfigMap '%s/%s'", targetKey, broadcastConfigMap.Namespace, broadcastConfigMap.Name)
+	}
+	target, err := strconv.Atoi(rawTarget)
+	if err != nil {
+		log.Fatalf("ERROR: Failed to parse target '%s' from broadcast ConfigMap '%s/%s': %v", rawTarget, broadcastConfigMap.Namespace, broadcastConfigMap.Name, err)
+	}
+	log.Printf("DEBUG: target=%d", target)
+	log.Printf("DEBUG: generation=%d", generation)
+	return generation <= target
 }
 
 func runWorker() {
@@ -253,6 +213,6 @@ func waitForExitFile() {
 		} else if !os.IsNotExist(err) {
 			log.Printf("WARN: Failed to stat /tmp/fail: %v", err)
 		}
-		time.Sleep(time.Duration(pollIntervalSeconds) * time.Second)
+		time.Sleep(time.Duration(filePollIntervalSeconds) * time.Second)
 	}
 }
