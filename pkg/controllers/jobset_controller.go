@@ -265,39 +265,6 @@ func (r *JobSetReconciler) createRestartGroupConfigMapsIfNecessary(ctx context.C
 		return nil
 	}
 
-	// Check if generation ConfigMap already exists.
-	// If the generation ConfigMap doesn't exist in the same namespace, create it.
-	var generationConfigMap corev1.ConfigMap
-	generationConfigMapName := restartGroupName + "-generation"
-	if err := r.Get(ctx, types.NamespacedName{Name: generationConfigMapName, Namespace: js.Namespace}, &generationConfigMap); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return err
-		}
-		generationConfigMap := corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      generationConfigMapName,
-				Namespace: js.Namespace,
-				Labels: map[string]string{
-					jobset.JobSetNameKey:       js.Name,
-					jobset.RestartGroupNameKey: restartGroupName,
-				},
-			},
-			Data: map[string]string{},
-		}
-
-		// Set controller owner reference for garbage collection and reconcilation.
-		if err := ctrl.SetControllerReference(js, &generationConfigMap, r.Scheme); err != nil {
-			return err
-		}
-
-		// Create generation ConfigMap.
-		if err := r.Create(ctx, &generationConfigMap); err != nil {
-			r.Record.Eventf(js, corev1.EventTypeWarning, "GenerationConfigMapCreationFailed", err.Error()) // TODO: Constant
-			return err
-		}
-		log.V(2).Info("successfully created generation configmap", "configmap", klog.KObj(&generationConfigMap))
-	}
-
 	// Check if broadcast ConfigMap already exists.
 	// If the broadcast ConfigMap doesn't exist in the same namespace, create it.
 	var broadcastConfigMap corev1.ConfigMap

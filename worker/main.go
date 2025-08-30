@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"time"
@@ -81,16 +82,22 @@ func getEnvironmentVariables() (string, string, string, string, string) {
 
 func run(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConfigMapName string, generationConfigMapName string, workerId string) {
 	log.Printf("INFO: Running")
+	rand.Seed(time.Now().UnixNano())
 	isBarrierUp := true
 	isGenerationPatched := false
 	generation := -1
 	for {
-		log.Printf("INFO: Creating watch for broadcast ConfigMap '%s/%s'", namespace, broadcastConfigMapName)
+		// Spread initial load over 15 seconds
+		initialDelay := time.Duration(rand.Intn(10*1000)) * time.Millisecond // Distribute load over 10 seconds
+		time.Sleep(initialDelay)
 		timeout := int64(watchTimeoutSeconds)
+		log.Printf("INFO: Running after %v delay", initialDelay)
+		log.Printf("INFO: Creating watch for broadcast ConfigMap '%s/%s'", namespace, broadcastConfigMapName)
 		watcher, err := kubernetesClient.CoreV1().ConfigMaps(namespace).Watch(context.TODO(), metav1.ListOptions{
 			FieldSelector:  "metadata.name=" + broadcastConfigMapName,
 			TimeoutSeconds: &timeout,
 		})
+		log.Printf("DEBUG: Created broadcast ConfigMap '%s/%s'", namespace, broadcastConfigMapName)
 		if err != nil {
 			log.Fatalf("ERROR: Failed to watch broadcast ConfigMap '%s/%s': %v", namespace, broadcastConfigMapName, err)
 		}
@@ -106,6 +113,7 @@ func run(kubernetesClient *kubernetes.Clientset, namespace string, broadcastConf
 				continue
 			}
 			if event.Type == watch.Modified || event.Type == watch.Added {
+				log.Printf("INFO: New added / modified watch event")
 				if !isGenerationPatched {
 					generation = patchGeneration(kubernetesClient, broadcastConfigMap, namespace, generationConfigMapName, workerId)
 					isGenerationPatched = true
@@ -136,12 +144,24 @@ func patchGeneration(kubernetesClient *kubernetes.Clientset, broadcastConfigMap 
 	if err != nil {
 		log.Fatalf("ERROR: Failed to parse target '%s' from broadcast ConfigMap '%s/%s': %v", rawTarget, broadcastConfigMap.Namespace, broadcastConfigMap.Name, err)
 	}
-	log.Printf("DEBUG: target=%d", target)
 	generation := target + 1
-	log.Printf("DEBUG: generation=%d", generation)
-	patchPayload := map[string]any{
-		"data": map[string]string{
-			workerId: strconv.Itoa(generation),
+	log.Printf("DEBUG: target=%d and generation=%d", target, generation)
+	patchPayload := v1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      generationConfigMapName + "-" + workerId,
+			Namespace: namespace,
+			//OwnerReferences: []metav1.OwnerReference{}, // TODO: Add Pod as owner
+			Labels: map[string]string{
+				"jobset.sigs.k8s.io/jobset-name":              "jobset-benchmark",        // TODO: Get from env variable
+				"alpha.jobset.sigs.k8s.io/restart-group-name": "restart-group-benchmark", // TODO: Get from env variable
+			},
+		},
+		Data: map[string]string{
+			"generation": strconv.Itoa(generation),
 		},
 	}
 	patchBytes, err := json.Marshal(patchPayload)
@@ -151,15 +171,18 @@ func patchGeneration(kubernetesClient *kubernetes.Clientset, broadcastConfigMap 
 	const maxRetries = 5
 	var lastErr error
 	for i := range maxRetries {
-		_, err = kubernetesClient.CoreV1().ConfigMaps(namespace).Patch(context.TODO(), generationConfigMapName, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
+		_, err = kubernetesClient.CoreV1().ConfigMaps(namespace).Patch(context.TODO(), generationConfigMapName+"-"+workerId, types.ApplyPatchType, patchBytes, metav1.PatchOptions{
+			FieldManager: "test",
+		})
 		if err == nil {
+			log.Printf("DEBUG: Patched generation=%d", generation)
 			return generation
 		}
 		lastErr = err
-		log.Printf("WARN: Failed to patch generation ConfigMap '%s/%s' on attempt %d/%d: %v", namespace, generationConfigMapName, i+1, maxRetries, err)
+		log.Printf("WARN: Failed to patch generation ConfigMap '%s/%s' on attempt %d/%d: %v", namespace, generationConfigMapName+"-"+workerId, i+1, maxRetries, err)
 		time.Sleep(1 * time.Second)
 	}
-	log.Fatalf("ERROR: Failed to patch generation ConfigMap '%s/%s' after %d attempts: %v", namespace, generationConfigMapName, maxRetries, lastErr)
+	log.Fatalf("ERROR: Failed to patch generation ConfigMap '%s/%s' after %d attempts: %v", namespace, generationConfigMapName+"-"+workerId, maxRetries, lastErr)
 	return -1
 }
 
@@ -173,8 +196,7 @@ func mustRestart(broadcastConfigMap *v1.ConfigMap, generation int) bool {
 	if err != nil {
 		log.Fatalf("ERROR: Failed to parse restart '%s' from broadcast ConfigMap '%s/%s': %v", rawRestart, broadcastConfigMap.Namespace, broadcastConfigMap.Name, err)
 	}
-	log.Printf("DEBUG: restart=%d", restart)
-	log.Printf("DEBUG: generation=%d", generation)
+	log.Printf("DEBUG: restart=%d and generation=%d", restart, generation)
 	return generation <= restart
 }
 
@@ -188,8 +210,7 @@ func shouldLiftBarrier(broadcastConfigMap *v1.ConfigMap, generation int) bool {
 	if err != nil {
 		log.Fatalf("ERROR: Failed to parse target '%s' from broadcast ConfigMap '%s/%s': %v", rawTarget, broadcastConfigMap.Namespace, broadcastConfigMap.Name, err)
 	}
-	log.Printf("DEBUG: target=%d", target)
-	log.Printf("DEBUG: generation=%d", generation)
+	log.Printf("DEBUG: target=%d and generation=%d", target, generation)
 	return generation <= target
 }
 

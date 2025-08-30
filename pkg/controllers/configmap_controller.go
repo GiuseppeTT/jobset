@@ -16,6 +16,10 @@ import (
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
 )
 
+const (
+	RestartGroupNameIndexKey = "restartGroupName"
+)
+
 type ConfigMapReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -40,6 +44,17 @@ func (r *ConfigMapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+func SetupConfigMapIndexes(ctx context.Context, indexer client.FieldIndexer) error {
+	return indexer.IndexField(ctx, &corev1.ConfigMap{}, RestartGroupNameIndexKey, func(obj client.Object) []string {
+		configMap := obj.(*corev1.ConfigMap)
+		restartGroupName, ok := configMap.Labels[jobset.RestartGroupNameKey]
+		if !ok {
+			return nil
+		}
+		return []string{restartGroupName}
+	})
+}
+
 func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx).WithValues("generationConfigmap", req.NamespacedName)
 	log.V(2).Info("Reconciling restart group ConfigMap")
@@ -53,10 +68,6 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	restartGroupName, ok := generationConfigMap.GetLabels()[jobset.RestartGroupNameKey]
 	if !ok {
 		return ctrl.Result{}, fmt.Errorf("'%s' label missing in generation ConfigMap '%s'", jobset.RestartGroupNameKey, req.NamespacedName)
-	}
-	generationByWorkerId, err := getGenerationByWorkerId(generationConfigMap)
-	if err != nil {
-		return ctrl.Result{}, err
 	}
 
 	// Get JobSet
@@ -76,6 +87,16 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 	log = log.WithValues("desiredWorkerCount", desiredWorkerCount)
 
+	// Get all generation ConfigMaps
+	var generationConfigMaps corev1.ConfigMapList
+	if err := r.List(ctx, &generationConfigMaps, client.InNamespace(generationConfigMap.Namespace), client.MatchingFields{RestartGroupNameIndexKey: restartGroupName}); err != nil {
+		return ctrl.Result{}, err
+	}
+	generationByWorkerId, err := getGenerationByWorkerId(generationConfigMaps)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Calculate new state
 	log.V(2).Info("Calculating new state")
 	if maximumGeneration, ok := allWorkersWaiting(generationByWorkerId, desiredWorkerCount); ok {
@@ -92,14 +113,18 @@ func (r *ConfigMapReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func getGenerationByWorkerId(generationConfigMap corev1.ConfigMap) (map[string]int, error) {
+func getGenerationByWorkerId(generationConfigMaps corev1.ConfigMapList) (map[string]int, error) {
 	generationByWorkerId := make(map[string]int)
-	for workerId, rawGeneration := range generationConfigMap.Data {
+	for _, generationConfigMap := range generationConfigMaps.Items {
+		rawGeneration, ok := generationConfigMap.Data["generation"]
+		if !ok {
+			continue
+		}
 		generation, err := strconv.Atoi(rawGeneration)
 		if err != nil {
-			return map[string]int{}, fmt.Errorf("failed to parse generation '%s' for worker '%s': %v", rawGeneration, workerId, err)
+			return map[string]int{}, fmt.Errorf("failed to parse generation '%s' for ConfigMap '%s/%s': %v", rawGeneration, generationConfigMap.Namespace, generationConfigMap.Name, err)
 		}
-		generationByWorkerId[workerId] = generation
+		generationByWorkerId[generationConfigMap.Name] = generation
 	}
 	return generationByWorkerId, nil
 }
@@ -153,18 +178,27 @@ func newBarrier(generationByWorkerId map[string]int) (int, bool) {
 }
 
 func (r *ConfigMapReconciler) updateBroadcastConfigMap(ctx context.Context, namespace string, restartGroupName string, target int, restart int) error {
+	log := ctrl.LoggerFrom(ctx)
 	var broadcastConfigMap corev1.ConfigMap
 	namespacedName := types.NamespacedName{Namespace: namespace, Name: restartGroupName + "-broadcast"}
 	if err := r.Get(ctx, namespacedName, &broadcastConfigMap); err != nil {
 		return err
 	}
-	broadcastConfigMap.ManagedFields = nil
-	if target >= 0 {
+	isModified := false
+	if target >= 0 && broadcastConfigMap.Data["target"] != strconv.Itoa(target) {
 		broadcastConfigMap.Data["target"] = strconv.Itoa(target)
+		isModified = true
 	}
-	if restart >= 0 {
+	if restart >= 0 && broadcastConfigMap.Data["restart"] != strconv.Itoa(restart) {
 		broadcastConfigMap.Data["restart"] = strconv.Itoa(restart)
+		isModified = true
 	}
+	broadcastConfigMap.ManagedFields = nil
+	if !isModified {
+		log.V(2).Info("Broadcast ConfigMap already has the desired state, skipping update")
+		return nil
+	}
+	log.V(2).Info("Updating Broadcast ConfigMap")
 	err := r.Patch(ctx, &broadcastConfigMap, client.Apply, client.FieldOwner("restartgroup-configmap-controller"), client.ForceOwnership)
 	return err
 }
