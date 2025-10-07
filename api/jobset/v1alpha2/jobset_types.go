@@ -74,6 +74,12 @@ const (
 	// If a ReplicatedJob is part of a group, then its child jobs and pods have this
 	// label/annotation ranging from 0 to annotations[GroupReplicasKey] - 1
 	JobGroupIndexKey string = "jobset.sigs.k8s.io/job-group-index"
+
+	// TODO: Description
+	InPlaceRestartKey string = "alpha.jobset.sigs.k8s.io/in-place-restart"
+
+	// TODO: Description
+	InPlaceRestartGenerationKey string = "alpha.jobset.sigs.k8s.io/in-place-restart-generation"
 )
 
 type JobSetConditionType string
@@ -187,6 +193,14 @@ type JobSetStatus struct {
 	// +listType=map
 	// +listMapKey=name
 	ReplicatedJobsStatus []ReplicatedJobStatus `json:"replicatedJobsStatus,omitempty"`
+
+	// TODO: Description
+	// +kubebuilder:default=0
+	InPlaceRestartTarget int32 `json:"inPlaceRestartTarget"`
+
+	// TODO: Description
+	// +kubebuilder:default=0
+	InPlaceRestartOutdated int32 `json:"inPlaceRestartOutdated"`
 }
 
 // ReplicatedJobStatus defines the observed ReplicatedJobs Readiness.

@@ -94,4 +94,7 @@ const (
 	// Event reason and message related to applying the RestartJobSetAndIgnoreMaxRestarts failure policy action.
 	RestartJobSetAndIgnoreMaxRestartsActionReason  = "RestartJobSetAndIgnoreMaxRestartsFailurePolicyAction"
 	RestartJobSetAndIgnoreMaxRestartsActionMessage = "applying RestartJobSetAndIgnoreMaxRestarts failure policy action"
+
+	// TODO: Description
+	PodJobSetKey = "podJobSet"
 )
