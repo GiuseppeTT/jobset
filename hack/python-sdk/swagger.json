@@ -229,6 +229,10 @@
     "jobset.v1alpha2.JobSetStatus": {
       "description": "JobSetStatus defines the observed state of JobSet",
       "type": "object",
+      "required": [
+        "inPlaceRestartTarget",
+        "inPlaceRestartOutdated"
+      ],
       "properties": {
         "conditions": {
           "description": "conditions track status",
@@ -241,6 +245,16 @@
             "type"
           ],
           "x-kubernetes-list-type": "map"
+        },
+        "inPlaceRestartOutdated": {
+          "type": "integer",
+          "format": "int32",
+          "default": 0
+        },
+        "inPlaceRestartTarget": {
+          "type": "integer",
+          "format": "int32",
+          "default": 0
         },
         "replicatedJobsStatus": {
           "description": "replicatedJobsStatus track the number of JobsReady for each replicatedJob.",

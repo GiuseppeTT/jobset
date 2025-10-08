@@ -29,11 +29,13 @@ class JobsetV1alpha2JobSetStatus(BaseModel):
     JobSetStatus defines the observed state of JobSet
     """ # noqa: E501
     conditions: Optional[List[IoK8sApimachineryPkgApisMetaV1Condition]] = Field(default=None, description="conditions track status")
+    in_place_restart_outdated: StrictInt = Field(alias="inPlaceRestartOutdated")
+    in_place_restart_target: StrictInt = Field(alias="inPlaceRestartTarget")
     replicated_jobs_status: Optional[List[JobsetV1alpha2ReplicatedJobStatus]] = Field(default=None, description="replicatedJobsStatus track the number of JobsReady for each replicatedJob.", alias="replicatedJobsStatus")
     restarts: Optional[StrictInt] = Field(default=0, description="restarts tracks the number of times the JobSet has restarted (i.e. recreated in case of RecreateAll policy).")
     restarts_count_towards_max: Optional[StrictInt] = Field(default=None, description="restartsCountTowardsMax tracks the number of times the JobSet has restarted that counts towards the maximum allowed number of restarts.", alias="restartsCountTowardsMax")
     terminal_state: Optional[StrictStr] = Field(default=None, description="terminalState the state of the JobSet when it finishes execution. It can be either Completed or Failed. Otherwise, it is empty by default.", alias="terminalState")
-    __properties: ClassVar[List[str]] = ["conditions", "replicatedJobsStatus", "restarts", "restartsCountTowardsMax", "terminalState"]
+    __properties: ClassVar[List[str]] = ["conditions", "inPlaceRestartOutdated", "inPlaceRestartTarget", "replicatedJobsStatus", "restarts", "restartsCountTowardsMax", "terminalState"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -101,6 +103,8 @@ class JobsetV1alpha2JobSetStatus(BaseModel):
 
         _obj = cls.model_validate({
             "conditions": [IoK8sApimachineryPkgApisMetaV1Condition.from_dict(_item) for _item in obj["conditions"]] if obj.get("conditions") is not None else None,
+            "inPlaceRestartOutdated": obj.get("inPlaceRestartOutdated") if obj.get("inPlaceRestartOutdated") is not None else 0,
+            "inPlaceRestartTarget": obj.get("inPlaceRestartTarget") if obj.get("inPlaceRestartTarget") is not None else 0,
             "replicatedJobsStatus": [JobsetV1alpha2ReplicatedJobStatus.from_dict(_item) for _item in obj["replicatedJobsStatus"]] if obj.get("replicatedJobsStatus") is not None else None,
             "restarts": obj.get("restarts") if obj.get("restarts") is not None else 0,
             "restartsCountTowardsMax": obj.get("restartsCountTowardsMax"),

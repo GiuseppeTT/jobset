@@ -488,7 +488,22 @@ func schema_jobset_api_jobset_v1alpha2_JobSetStatus(ref common.ReferenceCallback
 							},
 						},
 					},
+					"inPlaceRestartTarget": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int32",
+						},
+					},
+					"inPlaceRestartOutdated": {
+						SchemaProps: spec.SchemaProps{
+							Default: 0,
+							Type:    []string{"integer"},
+							Format:  "int32",
+						},
+					},
 				},
+				Required: []string{"inPlaceRestartTarget", "inPlaceRestartOutdated"},
 			},
 		},
 		Dependencies: []string{
