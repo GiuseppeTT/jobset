@@ -20,6 +20,15 @@ RUN CGO_ENABLED=${CGO_ENABLED} GOOS=linux GOARCH=${TARGETARCH} go build -o /agen
 # Final image
 FROM --platform=${BUILDPLATFORM} ${BASE_IMAGE}
 WORKDIR /
+
+# Install bash
+RUN apk add --no-cache bash
+
+# Copy the exit-on-demand script and make it executable
+COPY --from=builder /workspace/agent-worker/exit-on-demand.sh .
+RUN chmod +x exit-on-demand.sh
+
+# Copy the agent-worker binary
 COPY --from=builder /agent-worker .
 
 ENTRYPOINT ["/agent-worker"]

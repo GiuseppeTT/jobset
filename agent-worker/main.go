@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -25,20 +26,21 @@ const (
 	podNameKey                   = "POD_NAME"
 	jobSetNameKey                = "JOBSET_NAME"
 	restartPodInPlaceExitCodeKey = "RESTART_POD_IN_PLACE_EXIT_CODE"
+	workerCommandKey             = "WORKER_COMMAND"
 	filePollIntervalSeconds      = 1
 )
 
 func main() {
-	coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode := setup()
-	runAgent(coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode)
+	coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand := setup()
+	runAgent(coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand)
 }
 
-func setup() (*kubernetes.Clientset, *jobSetClient.Clientset, string, string, string, int) {
+func setup() (*kubernetes.Clientset, *jobSetClient.Clientset, string, string, string, int, string) {
 	log.Printf("INFO: Setting up")
 	coreClient := getCoreClient()
 	jobSetClient := getjobSetClient()
-	podNamespace, podName, jobSetName, restartPodInPlaceExitCode := getEnvironmentVariables()
-	return coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode
+	podNamespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand := getEnvironmentVariables()
+	return coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand
 }
 
 func getCoreClient() *kubernetes.Clientset {
@@ -67,7 +69,7 @@ func getjobSetClient() *jobSetClient.Clientset {
 	return jobSetClient
 }
 
-func getEnvironmentVariables() (string, string, string, int) {
+func getEnvironmentVariables() (string, string, string, int, string) {
 	log.Printf("INFO: Getting environment variables")
 	podNamespace := os.Getenv(podNamespaceKey)
 	if podNamespace == "" {
@@ -93,12 +95,17 @@ func getEnvironmentVariables() (string, string, string, int) {
 		log.Fatalf("ERROR: Failed to parse restartPodInPlaceExitCode: %v", err)
 	}
 	log.Printf("DEBUG: restartPodInPlaceExitCode=%s", rawRestartPodInPlaceExitCode)
-	return podNamespace, podName, jobSetName, restartPodInPlaceExitCode
+	workerCommand := os.Getenv(workerCommandKey)
+	if workerCommand == "" {
+		log.Fatalf("ERROR: '%s' environment variable must be set", workerCommandKey)
+	}
+	log.Printf("DEBUG: workerCommand=%s", workerCommand)
+	return podNamespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand
 }
 
-func runAgent(coreClient *kubernetes.Clientset, jobSetClient *jobSetClient.Clientset, podNamespace string, podName string, jobSetName string, restartPodInPlaceExitCode int) {
+func runAgent(coreClient *kubernetes.Clientset, jobSetClient *jobSetClient.Clientset, podNamespace string, podName string, jobSetName string, restartPodInPlaceExitCode int, workerCommand string) {
 	log.Printf("INFO: Starting agent")
-	watchParentJobSet(coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode)
+	watchParentJobSet(coreClient, jobSetClient, podNamespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand)
 }
 
 // Instead of getting the parent JobSet, setting up things and then watching the parent JobSet, do everything only using a watch
@@ -106,7 +113,7 @@ func runAgent(coreClient *kubernetes.Clientset, jobSetClient *jobSetClient.Clien
 // Basically, the agent-workers are expected to start running roughtly at the same time, which creates a thundering herd problem
 // By using only a watch instead of a get + watch, we reduce the number of thundering herd problems from two to one
 // On top of that, we also add jitter to starting the watch to mitigate the remaining thundering herd problem
-func watchParentJobSet(coreClient *kubernetes.Clientset, jobSetClient *jobSetClient.Clientset, podNamespace string, podName string, jobSetName string, restartPodInPlaceExitCode int) {
+func watchParentJobSet(coreClient *kubernetes.Clientset, jobSetClient *jobSetClient.Clientset, podNamespace string, podName string, jobSetName string, restartPodInPlaceExitCode int, workerCommand string) {
 	isBarrierUp := true
 	isGenerationPatched := false
 	generation := -1
@@ -123,13 +130,13 @@ func watchParentJobSet(coreClient *kubernetes.Clientset, jobSetClient *jobSetCli
 			time.Sleep(5 * time.Second) // TODO: Extract constant
 			continue
 		}
-		processWatchEvents(coreClient, watcher, podNamespace, podName, restartPodInPlaceExitCode, &isBarrierUp, &isGenerationPatched, &generation)
+		processWatchEvents(coreClient, watcher, podNamespace, podName, restartPodInPlaceExitCode, &isBarrierUp, &isGenerationPatched, &generation, workerCommand)
 		watcher.Stop()
 		log.Printf("WARN: Watch closed. Recreating watch")
 	}
 }
 
-func processWatchEvents(coreClient *kubernetes.Clientset, watcher watch.Interface, podNamespace string, podName string, restartPodInPlaceExitCode int, isBarrierUp *bool, isGenerationPatched *bool, generation *int) {
+func processWatchEvents(coreClient *kubernetes.Clientset, watcher watch.Interface, podNamespace string, podName string, restartPodInPlaceExitCode int, isBarrierUp *bool, isGenerationPatched *bool, generation *int, workerCommand string) {
 	for event := range watcher.ResultChan() {
 		log.Printf("INFO: New watch event")
 		if !(event.Type == watch.Modified || event.Type == watch.Added) {
@@ -151,7 +158,7 @@ func processWatchEvents(coreClient *kubernetes.Clientset, watcher watch.Interfac
 		}
 		if *isBarrierUp && shouldLiftBarrier(jobSet, *generation) {
 			log.Printf("INFO: Lifting barrier")
-			go runWorker()
+			go runWorker(workerCommand)
 			*isBarrierUp = false
 		}
 	}
@@ -199,29 +206,16 @@ func shouldLiftBarrier(jobSet *jobsetv1alpha2.JobSet, generation int) bool {
 	return generation <= target
 }
 
-func runWorker() {
+func runWorker(workerCommand string) {
 	log.Printf("INFO: Starting worker")
-	waitForExitFile()
-}
-
-// Exit with code <number> if a file named /tmp/exit<number> exists
-func waitForExitFile() {
-	for {
-		entries, err := os.ReadDir("/tmp")
-		if err != nil {
-			log.Printf("WARN: Failed to read /tmp directory: %v", err)
-			time.Sleep(time.Duration(filePollIntervalSeconds) * time.Second)
-			continue
+	cmd := exec.Command("bash", "-c", workerCommand)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitError.ExitCode())
 		}
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasPrefix(entry.Name(), "exit") {
-				exitCodeStr := strings.TrimPrefix(entry.Name(), "exit")
-				if exitCode, err := strconv.Atoi(exitCodeStr); err == nil {
-					log.Printf("INFO: Found exit file %s. Exiting with code %d", entry.Name(), exitCode)
-					os.Exit(exitCode)
-				}
-			}
-		}
-		time.Sleep(time.Duration(filePollIntervalSeconds) * time.Second)
+		log.Fatalf("ERROR: workerCommand failed with non-exit error: %v", err)
 	}
+	os.Exit(0)
 }
