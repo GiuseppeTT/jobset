@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -105,12 +106,14 @@ func runAgent(coreClient *kubernetes.Clientset, jobSetClient *jobSetClient.Clien
 // Basically, the agent-workers are expected to start running roughtly at the same time, which creates a thundering herd problem
 // By using only a watch instead of a get + watch, we reduce the number of thundering herd problems from two to one
 // On top of that, we also add jitter to starting the watch to mitigate the remaining thundering herd problem
-// TODO: Add jitter
 func watchParentJobSet(coreClient *kubernetes.Clientset, jobSetClient *jobSetClient.Clientset, podNamespace string, podName string, jobSetName string, restartPodInPlaceExitCode int) {
 	isBarrierUp := true
 	isGenerationPatched := false
 	generation := -1
 	for {
+		delay := time.Duration(rand.Intn(10*1000)) * time.Millisecond // TODO: Extract constant
+		log.Printf("INFO: Waiting for %v before creating watch", delay)
+		time.Sleep(delay)
 		log.Printf("INFO: Starting watch for JobSet '%s/%s'", podNamespace, jobSetName)
 		watcher, err := jobSetClient.JobsetV1alpha2().JobSets(podNamespace).Watch(context.Background(), metav1.ListOptions{
 			FieldSelector: "metadata.name=" + jobSetName,
