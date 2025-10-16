@@ -242,6 +242,10 @@
           ],
           "x-kubernetes-list-type": "map"
         },
+        "deprecatedEpoch": {
+          "type": "integer",
+          "format": "int32"
+        },
         "replicatedJobsStatus": {
           "description": "replicatedJobsStatus track the number of JobsReady for each replicatedJob.",
           "type": "array",
@@ -262,6 +266,10 @@
         },
         "restartsCountTowardsMax": {
           "description": "restartsCountTowardsMax tracks the number of times the JobSet has restarted that counts towards the maximum allowed number of restarts.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "syncedEpoch": {
           "type": "integer",
           "format": "int32"
         },

@@ -105,6 +105,7 @@ spec:
                     enum:
                     - Recreate
                     - BlockingRecreate
+                    - InPlaceRestart
                     type: string
                   rules:
                     description: |-
@@ -9550,6 +9551,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              deprecatedEpoch:
+                default: 0
+                format: int32
+                type: integer
               replicatedJobsStatus:
                 description: replicatedJobsStatus track the number of JobsReady for
                   each replicatedJob.
@@ -9608,6 +9613,10 @@ spec:
                 description: restartsCountTowardsMax tracks the number of times the
                   JobSet has restarted that counts towards the maximum allowed number
                   of restarts.
+                format: int32
+                type: integer
+              syncedEpoch:
+                default: 0
                 format: int32
                 type: integer
               terminalState:

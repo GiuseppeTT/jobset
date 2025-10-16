@@ -26,6 +26,8 @@ type JobSetStatusApplyConfiguration struct {
 	RestartsCountTowardsMax *int32                                  `json:"restartsCountTowardsMax,omitempty"`
 	TerminalState           *string                                 `json:"terminalState,omitempty"`
 	ReplicatedJobsStatus    []ReplicatedJobStatusApplyConfiguration `json:"replicatedJobsStatus,omitempty"`
+	DeprecatedEpoch         *int32                                  `json:"deprecatedEpoch,omitempty"`
+	SyncedEpoch             *int32                                  `json:"syncedEpoch,omitempty"`
 }
 
 // JobSetStatusApplyConfiguration constructs a declarative configuration of the JobSetStatus type for use with
@@ -81,5 +83,21 @@ func (b *JobSetStatusApplyConfiguration) WithReplicatedJobsStatus(values ...*Rep
 		}
 		b.ReplicatedJobsStatus = append(b.ReplicatedJobsStatus, *values[i])
 	}
+	return b
+}
+
+// WithDeprecatedEpoch sets the DeprecatedEpoch field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DeprecatedEpoch field is set to the value of the last call.
+func (b *JobSetStatusApplyConfiguration) WithDeprecatedEpoch(value int32) *JobSetStatusApplyConfiguration {
+	b.DeprecatedEpoch = &value
+	return b
+}
+
+// WithSyncedEpoch sets the SyncedEpoch field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the SyncedEpoch field is set to the value of the last call.
+func (b *JobSetStatusApplyConfiguration) WithSyncedEpoch(value int32) *JobSetStatusApplyConfiguration {
+	b.SyncedEpoch = &value
 	return b
 }

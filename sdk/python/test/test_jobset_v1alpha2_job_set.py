@@ -215,6 +215,7 @@ class TestJobsetV1alpha2JobSet(unittest.TestCase):
                             status = '', 
                             type = '', )
                         ], 
+                    deprecated_epoch = 56, 
                     replicated_jobs_status = [
                         jobset.models.jobset_v1alpha2_replicated_job_status.JobsetV1alpha2ReplicatedJobStatus(
                             active = 56, 
@@ -226,6 +227,7 @@ class TestJobsetV1alpha2JobSet(unittest.TestCase):
                         ], 
                     restarts = 56, 
                     restarts_count_towards_max = 56, 
+                    synced_epoch = 56, 
                     terminal_state = '', )
             )
         else:
