@@ -74,6 +74,9 @@ const (
 	// If a ReplicatedJob is part of a group, then its child jobs and pods have this
 	// label/annotation ranging from 0 to annotations[GroupReplicasKey] - 1
 	JobGroupIndexKey string = "jobset.sigs.k8s.io/job-group-index"
+
+	// TODO: Description
+	EpochKey string = "jobset.sigs.k8s.io/epoch"
 )
 
 type JobSetConditionType string
@@ -187,6 +190,16 @@ type JobSetStatus struct {
 	// +listType=map
 	// +listMapKey=name
 	ReplicatedJobsStatus []ReplicatedJobStatus `json:"replicatedJobsStatus,omitempty"`
+
+	// TODO: Description
+	// +optional
+	// +kubebuilder:default=0
+	DeprecatedEpoch int32 `json:"deprecatedEpoch,omitempty"`
+
+	// TODO: Description
+	// +optional
+	// +kubebuilder:default=0
+	SyncedEpoch int32 `json:"syncedEpoch,omitempty"`
 }
 
 // ReplicatedJobStatus defines the observed ReplicatedJobs Readiness.
@@ -399,7 +412,7 @@ type FailurePolicy struct {
 	Rules []FailurePolicyRule `json:"rules,omitempty"`
 }
 
-// +kubebuilder:validation:Enum=Recreate;BlockingRecreate
+// +kubebuilder:validation:Enum=Recreate;BlockingRecreate;InPlaceRestart
 type JobSetRestartStrategy string
 
 const (
@@ -409,6 +422,9 @@ const (
 	// BlockingRecreate ensures that all Jobs (and Pods) from a previous iteration are deleted before
 	// creating new Jobs.
 	BlockingRecreate JobSetRestartStrategy = "BlockingRecreate"
+
+	// TODO: Description
+	InPlaceRestart JobSetRestartStrategy = "InPlaceRestart"
 )
 
 type SuccessPolicy struct {
