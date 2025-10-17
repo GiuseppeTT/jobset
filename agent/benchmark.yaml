@@ -1,0 +1,140 @@
+# Service account
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: in-place-restart-sa
+---
+# JobSet watcher role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jobset-watcher
+  namespace: default
+rules:
+- apiGroups: ["jobset.x-k8s.io"]
+  resources: ["jobsets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bind-in-place-restart-sa-to-jobset-watcher
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: in-place-restart-sa
+  namespace: default
+roleRef:
+  kind: Role
+  name: jobset-watcher
+  apiGroup: rbac.authorization.k8s.io
+---
+# Pod patcher role
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-patcher
+  namespace: default
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bind-in-place-restart-sa-to-pod-patcher
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: in-place-restart-sa
+  namespace: default
+roleRef:
+  kind: Role
+  name: pod-patcher
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: update-only-in-place-restart-generation-pod-annotation
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   [""]
+      apiVersions: ["v1"]
+      operations:  ["UPDATE"]
+      resources:   ["pods"]
+  validations:
+    # Allow the service account 'in-place-restart-sa' to patch only the Pod annotation 'jobset.sigs.k8s.io/epoch'
+    - expression: >
+        request.userInfo.username != 'system:serviceaccount:default:in-place-restart-sa' ||
+        (
+          oldObject.spec == object.spec &&
+          oldObject.metadata.labels == object.metadata.labels &&
+          oldObject.metadata.annotations.all(key, key == 'jobset.sigs.k8s.io/epoch' || (key in object.metadata.annotations && oldObject.metadata.annotations[key] == object.metadata.annotations[key])) &&
+          object.metadata.annotations.all(key, key == 'jobset.sigs.k8s.io/epoch' || (key in oldObject.metadata.annotations && oldObject.metadata.annotations[key] == object.metadata.annotations[key]))
+        )
+      message: "ServiceAccount 'in-place-restart-sa' can only update the 'jobset.sigs.k8s.io/epoch' Pod annotation."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: update-only-in-place-restart-generation-pod-annotation-binding
+spec:
+  policyName: update-only-in-place-restart-generation-pod-annotation
+  validationActions: [Deny]
+---
+# JobSet
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: jobset-benchmark
+  annotations:
+    alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+spec:
+  failurePolicy:
+    maxRestarts: 100
+    restartStrategy: InPlaceRestart
+  replicatedJobs:
+  - name: workers
+    replicas: 10
+    template:
+      spec:
+        completions: 500
+        parallelism: 500
+        backoffLimit: 2147483647
+        podReplacementPolicy: Failed
+        template:
+          spec:
+            serviceAccountName: in-place-restart-sa # Restrict Pod to only watching JobSet objects and patching Pod annotation 'jobset.sigs.k8s.io/epoch'
+            restartPolicy: OnFailure
+            terminationGracePeriodSeconds: 0
+            containers:
+            - name: worker
+              image: <CHANGE ME> # !!!
+              restartPolicyRules:
+              env:
+              - name: NAMESPACE
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.namespace
+              - name: POD_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.name
+              - name: JOBSET_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-name']
+              - name: RESTART_POD_IN_PLACE_EXIT_CODE
+                value: "42"
+              - name: WORKER_COMMAND
+                value: "/exit-on-demand.sh"
+              - name: INITIAL_BACKOFF
+                value: "1s"
+              - name: MAX_BACKOFF
+                value: "5s"
+              - name: JITTER_BACKOFF_FACTOR
+                value: "5"
