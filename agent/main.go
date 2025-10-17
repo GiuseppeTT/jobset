@@ -18,10 +18,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/util/flowcontrol"
 	jobsetv1alpha2 "sigs.k8s.io/jobset/api/jobset/v1alpha2"
-	jobSetClient "sigs.k8s.io/jobset/client-go/clientset/versioned" // TODO: Find a better name
+	jobSetClientSet "sigs.k8s.io/jobset/client-go/clientset/versioned"
 )
 
 const (
+	// Environment variables
 	namespaceKey                 = "NAMESPACE"
 	podNameKey                   = "POD_NAME"
 	jobSetNameKey                = "JOBSET_NAME"
@@ -30,20 +31,15 @@ const (
 	initialBackOffKey            = "INITIAL_BACKOFF"
 	maxBackOffKey                = "MAX_BACKOFF"
 	jitterBackOffFactorKey       = "JITTER_BACKOFF_FACTOR"
-	filePollIntervalSeconds      = 1
 )
 
 func main() {
-	coreClient, jobSetClient, namespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand, maxBackOff, initialBackOff, jitterBackOffFactor := setup()
-	runAgent(coreClient, jobSetClient, namespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand, maxBackOff, initialBackOff, jitterBackOffFactor)
-}
-
-func setup() (*kubernetes.Clientset, *jobSetClient.Clientset, string, string, string, int, string, time.Duration, time.Duration, float64) {
-	log.Printf("INFO: Setting up")
+	log.Printf("INFO: Starting agent program")
 	coreClient := getCoreClient()
 	jobSetClient := getjobSetClient()
-	namespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand, maxBackOff, initialBackOff, jitterBackOffFactor := getEnvironmentVariables()
-	return coreClient, jobSetClient, namespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand, maxBackOff, initialBackOff, jitterBackOffFactor
+	agentConfig := getAgentConfig()
+	agent := NewAgent(coreClient, jobSetClient, agentConfig)
+	agent.Run()
 }
 
 func getCoreClient() *kubernetes.Clientset {
@@ -59,95 +55,140 @@ func getCoreClient() *kubernetes.Clientset {
 	return coreClient
 }
 
-func getjobSetClient() *jobSetClient.Clientset {
+func getjobSetClient() *jobSetClientSet.Clientset {
 	log.Printf("INFO: Creating JobSet Kubernetes client")
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		log.Fatalf("ERROR: Failed to get in-cluster config: %v", err)
 	}
-	jobSetClient, err := jobSetClient.NewForConfig(config)
+	jobSetClient, err := jobSetClientSet.NewForConfig(config)
 	if err != nil {
 		log.Fatalf("ERROR: Failed to create JobSe Kubernetes client: %v", err)
 	}
 	return jobSetClient
 }
 
-func getEnvironmentVariables() (string, string, string, int, string, time.Duration, time.Duration, float64) {
-	log.Printf("INFO: Getting environment variables")
-	namespace := os.Getenv(namespaceKey)
-	if namespace == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", namespaceKey)
-	}
-	log.Printf("DEBUG: namespace=%s", namespace)
-	podName := os.Getenv(podNameKey)
-	if podName == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", podNameKey)
-	}
-	log.Printf("DEBUG: podName=%s", podName)
-	jobSetName := os.Getenv(jobSetNameKey)
-	if jobSetName == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", jobSetNameKey)
-	}
-	log.Printf("DEBUG: jobSetName=%s", jobSetName)
-	rawRestartPodInPlaceExitCode := os.Getenv(restartPodInPlaceExitCodeKey)
-	if rawRestartPodInPlaceExitCode == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", restartPodInPlaceExitCodeKey)
-	}
-	restartPodInPlaceExitCode, err := strconv.Atoi(rawRestartPodInPlaceExitCode)
-	if err != nil {
-		log.Fatalf("ERROR: Failed to parse restartPodInPlaceExitCode: %v", err)
-	}
-	log.Printf("DEBUG: restartPodInPlaceExitCode=%s", rawRestartPodInPlaceExitCode)
-	workerCommand := os.Getenv(workerCommandKey)
-	if workerCommand == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", workerCommandKey)
-	}
-	log.Printf("DEBUG: workerCommand=%s", workerCommand)
-	initialBackOffRaw := os.Getenv(initialBackOffKey)
-	if initialBackOffRaw == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", initialBackOffKey)
-	}
-	initialBackOff, err := time.ParseDuration(initialBackOffRaw)
-	if err != nil {
-		log.Fatalf("ERROR: Failed to parse initialBackOff: %v", err)
-	}
-	log.Printf("DEBUG: initialBackOff=%v", initialBackOff)
-	maxBackOffRaw := os.Getenv(maxBackOffKey)
-	if maxBackOffRaw == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", maxBackOffKey)
-	}
-	maxBackOff, err := time.ParseDuration(maxBackOffRaw)
-	if err != nil {
-		log.Fatalf("ERROR: Failed to parse maxBackOff: %v", err)
-	}
-	log.Printf("DEBUG: maxBackOff=%v", maxBackOff)
-	// Parse
-	jitterBackOffFactorRaw := os.Getenv(jitterBackOffFactorKey)
-	if jitterBackOffFactorRaw == "" {
-		log.Fatalf("ERROR: '%s' environment variable must be set", jitterBackOffFactorKey)
-	}
-	jitterBackOffFactor, err := strconv.ParseFloat(jitterBackOffFactorRaw, 64)
-	if err != nil {
-		log.Fatalf("ERROR: Failed to parse jitterBackOffFactor: %v", err)
-	}
-	log.Printf("DEBUG: jitterBackOffFactor=%v", jitterBackOffFactor)
-	return namespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand, initialBackOff, maxBackOff, jitterBackOffFactor
+type AgentConfig struct {
+	Namespace                 string
+	PodName                   string
+	JobSetName                string
+	RestartPodInPlaceExitCode int
+	WorkerCommand             string
+	InitialBackOff            time.Duration
+	MaxBackOff                time.Duration
+	JitterBackOffFactor       float64
 }
 
-func runAgent(
-	coreClient *kubernetes.Clientset,
-	jobSetClient *jobSetClient.Clientset,
+func NewAgentConfig(
 	namespace string,
 	podName string,
 	jobSetName string,
 	restartPodInPlaceExitCode int,
 	workerCommand string,
-	maxBackOff time.Duration,
 	initialBackOff time.Duration,
+	maxBackOff time.Duration,
 	jitterBackOffFactor float64,
-) {
+) AgentConfig {
+	return AgentConfig{
+		Namespace:                 namespace,
+		PodName:                   podName,
+		JobSetName:                jobSetName,
+		RestartPodInPlaceExitCode: restartPodInPlaceExitCode,
+		WorkerCommand:             workerCommand,
+		InitialBackOff:            initialBackOff,
+		MaxBackOff:                maxBackOff,
+		JitterBackOffFactor:       jitterBackOffFactor,
+	}
+}
+
+func getAgentConfig() AgentConfig {
+	log.Printf("INFO: Getting agent config")
+	namespace := getRequiredStringEnv(namespaceKey)
+	podName := getRequiredStringEnv(podNameKey)
+	jobSetName := getRequiredStringEnv(jobSetNameKey)
+	restartPodInPlaceExitCode := getRequiredIntEnv(restartPodInPlaceExitCodeKey)
+	workerCommand := getRequiredStringEnv(workerCommandKey)
+	initialBackOff := getRequiredDurationEnv(initialBackOffKey)
+	maxBackOff := getRequiredDurationEnv(maxBackOffKey)
+	jitterBackOffFactor := getRequiredFloat64Env(jitterBackOffFactorKey)
+	return NewAgentConfig(
+		namespace,
+		podName,
+		jobSetName,
+		restartPodInPlaceExitCode,
+		workerCommand,
+		initialBackOff,
+		maxBackOff,
+		jitterBackOffFactor,
+	)
+}
+
+func getRequiredStringEnv(key string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		log.Fatalf("ERROR: '%s' environment variable must be set", key)
+	}
+	log.Printf("DEBUG: %s=%s", key, value)
+	return value
+}
+
+func getRequiredIntEnv(key string) int {
+	valueStr := getRequiredStringEnv(key)
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		log.Fatalf("ERROR: Failed to parse %s: %v", key, err)
+	}
+	log.Printf("DEBUG: %s=%d", key, value)
+	return value
+}
+
+func getRequiredFloat64Env(key string) float64 {
+	valueStr := getRequiredStringEnv(key)
+	value, err := strconv.ParseFloat(valueStr, 64)
+	if err != nil {
+		log.Fatalf("ERROR: Failed to parse %s: %v", key, err)
+	}
+	log.Printf("DEBUG: %s=%f", key, value)
+	return value
+}
+
+func getRequiredDurationEnv(key string) time.Duration {
+	valueStr := getRequiredStringEnv(key)
+	value, err := time.ParseDuration(valueStr)
+	if err != nil {
+		log.Fatalf("ERROR: Failed to parse %s: %v", key, err)
+	}
+	log.Printf("DEBUG: %s=%s", key, value)
+	return value
+}
+
+type Agent struct {
+	coreClient     *kubernetes.Clientset
+	jobSetClient   *jobSetClientSet.Clientset
+	config         AgentConfig
+	epoch          int
+	isEpochPatched bool
+	isBarrierUp    bool
+}
+
+func NewAgent(
+	coreClient *kubernetes.Clientset,
+	jobSetClient *jobSetClientSet.Clientset,
+	config AgentConfig,
+) *Agent {
+	return &Agent{
+		coreClient:     coreClient,
+		jobSetClient:   jobSetClient,
+		config:         config,
+		epoch:          -1,
+		isEpochPatched: false,
+		isBarrierUp:    true,
+	}
+}
+
+func (a *Agent) Run() {
 	log.Printf("INFO: Starting agent")
-	watchParentJobSet(coreClient, jobSetClient, namespace, podName, jobSetName, restartPodInPlaceExitCode, workerCommand, maxBackOff, initialBackOff, jitterBackOffFactor)
+	a.watchParentJobSet()
 }
 
 // Instead of getting the parent JobSet, setting up things and then watching the parent JobSet, do everything only using a watch
@@ -155,52 +196,41 @@ func runAgent(
 // Basically, the agents are expected to start running roughtly at the same time, which creates a thundering herd problem
 // By using only a watch instead of a get + watch, we reduce the number of thundering herd problems from two to one
 // On top of that, we also add jitter to starting the watch to mitigate the remaining thundering herd problem
-func watchParentJobSet(
-	coreClient *kubernetes.Clientset,
-	jobSetClient *jobSetClient.Clientset,
-	namespace string,
-	podName string,
-	jobSetName string,
-	restartPodInPlaceExitCode int,
-	workerCommand string,
-	maxBackOff time.Duration,
-	initialBackOff time.Duration,
-	jitterBackOffFactor float64,
-) {
-	log.Printf("INFO: Watching parent JobSet")
-	isBarrierUp := true
-	isEpochPatched := false
-	epoch := -1
+func (a *Agent) watchParentJobSet() {
+	log.Printf("INFO: Watching parent JobSet '%s/%s'", a.config.Namespace, a.config.JobSetName)
 	for {
-		watcher, err := WatchWithJitter(context.Background(), jobSetClient, namespace, jobSetName, maxBackOff, initialBackOff, jitterBackOffFactor)
+		ctx := context.Background()
+		watcher, err := a.createWatcherWithJitter(ctx)
 		if err != nil {
-			log.Printf("WARN: Failed to create watch for JobSet: %v. Retrying in 5 seconds", err)
+			log.Printf("WARN: Failed to create watcher for parent JobSet '%s/%s'. Retrying in 5 seconds: %v", a.config.Namespace, a.config.JobSetName, err)
 			time.Sleep(5 * time.Second) // TODO: Extract constant
 			continue
 		}
-		processWatchEvents(coreClient, watcher, namespace, podName, restartPodInPlaceExitCode, &isBarrierUp, &isEpochPatched, &epoch, workerCommand)
+		a.processWatchEvents(watcher)
 		watcher.Stop()
 		log.Printf("WARN: Watch closed. Recreating watch")
 	}
 }
 
+// Create a watcher with jitter on **watcher creation**
+// Once the watcher is created, there is no jitter to continiue watching
 // Based on k8s.io/client-go@v0.34.1/gentype/type.go func (c *Client[T]) Watch
-func WatchWithJitter(ctx context.Context, jobSetClient *jobSetClient.Clientset, namespace, jobSetName string, maxBackOff, initialBackOff time.Duration, jitterBackOffFactor float64) (watch.Interface, error) {
-	log.Printf("INFO: Watching JobSet '%s/%s'", namespace, jobSetName)
+func (a *Agent) createWatcherWithJitter(ctx context.Context) (watch.Interface, error) {
+	log.Printf("INFO: Creating watcher on parent JobSet '%s/%s'", a.config.Namespace, a.config.JobSetName)
 	opts := metav1.ListOptions{
-		FieldSelector: "metadata.name=" + jobSetName,
+		FieldSelector: "metadata.name=" + a.config.JobSetName,
 		Watch:         true,
 	}
 	timeout := 10 * time.Minute // TODO: Extract constant
 	backOffManager := &rest.URLBackoff{
-		Backoff: flowcontrol.NewBackOffWithJitter(initialBackOff, maxBackOff, jitterBackOffFactor),
+		Backoff: flowcontrol.NewBackOffWithJitter(a.config.InitialBackOff, a.config.MaxBackOff, a.config.JitterBackOffFactor),
 	}
-	request := jobSetClient.
+	request := a.jobSetClient.
 		JobsetV1alpha2().
 		RESTClient().
 		Get().
-		Namespace(namespace).
-		Resource("jobsets").
+		Namespace(a.config.Namespace).
+		Resource("jobsets"). // TODO: Extract constant or get from JobSet library
 		VersionedParams(&opts, metav1.ParameterCodec).
 		Timeout(timeout).
 		BackOffWithContext(backOffManager)
@@ -208,8 +238,8 @@ func WatchWithJitter(ctx context.Context, jobSetClient *jobSetClient.Clientset, 
 	return request.Watch(ctx)
 }
 
-func processWatchEvents(coreClient *kubernetes.Clientset, watcher watch.Interface, namespace string, podName string, restartPodInPlaceExitCode int, isBarrierUp *bool, isEpochPatched *bool, epoch *int, workerCommand string) {
-	log.Printf("INFO: Processing watch events")
+func (a *Agent) processWatchEvents(watcher watch.Interface) {
+	log.Printf("INFO: Processing watch events from parent JobSet '%s/%s'", a.config.Namespace, a.config.JobSetName)
 	for event := range watcher.ResultChan() {
 		log.Printf("INFO: New watch event")
 		if !(event.Type == watch.Modified || event.Type == watch.Added) {
@@ -221,23 +251,23 @@ func processWatchEvents(coreClient *kubernetes.Clientset, watcher watch.Interfac
 			log.Printf("WARN: Watched object is not a JobSet, but %T. Skipping", event.Object)
 			continue
 		}
-		if !*isEpochPatched {
-			*epoch = patchEpoch(coreClient, namespace, podName, jobSet)
-			*isEpochPatched = true
+		if a.shouldPatchEpoch() {
+			a.patchEpoch(jobSet)
 		}
-		if shouldRestart(jobSet, *epoch) {
-			log.Printf("INFO: Restarting Pod in place")
-			os.Exit(restartPodInPlaceExitCode)
+		if a.shouldRestartInPlace(jobSet) {
+			a.restartInPlace()
 		}
-		if *isBarrierUp && shouldLiftBarrier(jobSet, *epoch) {
-			log.Printf("INFO: Lifting barrier")
-			go runWorker(workerCommand)
-			*isBarrierUp = false
+		if a.shouldLiftBarrier(jobSet) {
+			a.liftBarrier()
 		}
 	}
 }
 
-func patchEpoch(coreClient *kubernetes.Clientset, namespace string, podName string, jobSet *jobsetv1alpha2.JobSet) int {
+func (a *Agent) shouldPatchEpoch() bool {
+	return !a.isEpochPatched
+}
+
+func (a *Agent) patchEpoch(jobSet *jobsetv1alpha2.JobSet) {
 	log.Printf("INFO: Patching epoch")
 	mostRecentSyncedEpoch := int(jobSet.Status.SyncedEpoch)
 	epoch := mostRecentSyncedEpoch + 1
@@ -252,43 +282,58 @@ func patchEpoch(coreClient *kubernetes.Clientset, namespace string, podName stri
 	if err != nil {
 		log.Fatalf("ERROR: Failed to marshal patch payload: %v", err)
 	}
-	for i := range 5 { // TODO: Extract constant maxPatchRetries
-		_, err = coreClient.CoreV1().Pods(namespace).Patch(context.Background(), podName, types.JSONPatchType, patchBytes, metav1.PatchOptions{})
+	for i := range 5 { // TODO: Extract constant
+		_, err = a.coreClient.CoreV1().Pods(a.config.Namespace).Patch(context.Background(), a.config.PodName, types.JSONPatchType, patchBytes, metav1.PatchOptions{})
 		if err == nil {
-			log.Printf("INFO: Successfully patched pod '%s' with epoch '%d'", podName, epoch)
-			return epoch
+			log.Printf("INFO: Successfully patched Pod '%s/%s' with epoch '%d'", a.config.Namespace, a.config.PodName, epoch)
+			break
 		}
-		log.Printf("WARN: Failed to patch pod '%s' (attempt %d/5): %v. Retrying in %d seconds...", podName, i+1, err, 2*(i+1))
-		time.Sleep(time.Duration(2*(i+1)) * time.Second)
+		if i == 4 {
+			log.Fatalf("ERROR: Failed to patch pod '%s/%s' after 4 attempts: %v", a.config.Namespace, a.config.PodName, err)
+		}
+		sleepDuration := time.Duration(2*(i+1)) * time.Second
+		log.Printf("WARN: Failed to patch Pod '%s/%s' (attempt %d/4): Retrying in %v seconds: %v", a.config.Namespace, a.config.PodName, i+1, sleepDuration, err)
+		time.Sleep(sleepDuration)
 	}
-	log.Fatalf("ERROR: Failed to patch pod '%s' after 5 attempts: %v", podName, err)
-	return -1 // Unreachable
+	a.epoch = epoch
+	a.isEpochPatched = true
 }
 
-func shouldRestart(jobSet *jobsetv1alpha2.JobSet, epoch int) bool {
+func (a *Agent) shouldRestartInPlace(jobSet *jobsetv1alpha2.JobSet) bool {
 	log.Printf("INFO: Checking if should restart")
 	mostRecentDeprecatedEpoch := int(jobSet.Status.DeprecatedEpoch)
-	log.Printf("DEBUG: epoch=%d and deprecatedEpoch=%d", epoch, mostRecentDeprecatedEpoch)
-	return epoch <= mostRecentDeprecatedEpoch
+	log.Printf("DEBUG: epoch=%d and deprecatedEpoch=%d", a.epoch, mostRecentDeprecatedEpoch)
+	return a.epoch <= mostRecentDeprecatedEpoch
 }
 
-func shouldLiftBarrier(jobSet *jobsetv1alpha2.JobSet, epoch int) bool {
+func (a *Agent) restartInPlace() {
+	log.Printf("INFO: Restarting Pod in place")
+	os.Exit(a.config.RestartPodInPlaceExitCode)
+}
+
+func (a *Agent) shouldLiftBarrier(jobSet *jobsetv1alpha2.JobSet) bool {
 	log.Printf("INFO: Checking if should lift barrier")
 	mostRecentSyncedEpoch := int(jobSet.Status.SyncedEpoch)
-	log.Printf("DEBUG: epoch=%d and target=%d", epoch, mostRecentSyncedEpoch)
-	return epoch == mostRecentSyncedEpoch
+	log.Printf("DEBUG: epoch=%d and syncedEpoch=%d", a.epoch, mostRecentSyncedEpoch)
+	return a.isBarrierUp && a.epoch == mostRecentSyncedEpoch
 }
 
-func runWorker(workerCommand string) {
+func (a *Agent) liftBarrier() {
+	log.Printf("INFO: Lifting barrier")
+	go a.runWorker()
+	a.isBarrierUp = false
+}
+
+func (a *Agent) runWorker() {
 	log.Printf("INFO: Starting worker")
-	cmd := exec.Command("bash", "-c", workerCommand)
+	cmd := exec.Command("bash", "-c", a.config.WorkerCommand)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitError.ExitCode())
 		}
-		log.Fatalf("ERROR: workerCommand failed with non-exit error: %v", err)
+		log.Fatalf("ERROR: worker command failed with non-exit error: %v", err)
 	}
 	os.Exit(0)
 }
