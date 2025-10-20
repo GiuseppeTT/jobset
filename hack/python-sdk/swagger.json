@@ -243,6 +243,7 @@
           "x-kubernetes-list-type": "map"
         },
         "deprecatedEpoch": {
+          "description": "Part of in place restart The most recent deprecated epoch of the JobSet workload Pods that have an epoch smaller than or equal to this value should be restarted in place by their agent sidecars",
           "type": "integer",
           "format": "int32"
         },
@@ -270,6 +271,7 @@
           "format": "int32"
         },
         "syncedEpoch": {
+          "description": "Part of in place restart The most recent synced epoch of the JobSet workload Pods that have an epoch equal to this value should lift their barrier by their agent sidecars to allow the worker containers to start running",
           "type": "integer",
           "format": "int32"
         },

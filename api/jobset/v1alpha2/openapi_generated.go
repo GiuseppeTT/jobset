@@ -490,14 +490,16 @@ func schema_jobset_api_jobset_v1alpha2_JobSetStatus(ref common.ReferenceCallback
 					},
 					"deprecatedEpoch": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int32",
+							Description: "Part of in place restart The most recent deprecated epoch of the JobSet workload Pods that have an epoch smaller than or equal to this value should be restarted in place by their agent sidecars",
+							Type:        []string{"integer"},
+							Format:      "int32",
 						},
 					},
 					"syncedEpoch": {
 						SchemaProps: spec.SchemaProps{
-							Type:   []string{"integer"},
-							Format: "int32",
+							Description: "Part of in place restart The most recent synced epoch of the JobSet workload Pods that have an epoch equal to this value should lift their barrier by their agent sidecars to allow the worker containers to start running",
+							Type:        []string{"integer"},
+							Format:      "int32",
 						},
 					},
 				},

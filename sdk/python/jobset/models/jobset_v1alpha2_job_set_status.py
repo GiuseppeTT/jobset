@@ -29,11 +29,11 @@ class JobsetV1alpha2JobSetStatus(BaseModel):
     JobSetStatus defines the observed state of JobSet
     """ # noqa: E501
     conditions: Optional[List[IoK8sApimachineryPkgApisMetaV1Condition]] = Field(default=None, description="conditions track status")
-    deprecated_epoch: Optional[StrictInt] = Field(default=None, alias="deprecatedEpoch")
+    deprecated_epoch: Optional[StrictInt] = Field(default=None, description="Part of in place restart The most recent deprecated epoch of the JobSet workload Pods that have an epoch smaller than or equal to this value should be restarted in place by their agent sidecars", alias="deprecatedEpoch")
     replicated_jobs_status: Optional[List[JobsetV1alpha2ReplicatedJobStatus]] = Field(default=None, description="replicatedJobsStatus track the number of JobsReady for each replicatedJob.", alias="replicatedJobsStatus")
     restarts: Optional[StrictInt] = Field(default=0, description="restarts tracks the number of times the JobSet has restarted (i.e. recreated in case of RecreateAll policy).")
     restarts_count_towards_max: Optional[StrictInt] = Field(default=None, description="restartsCountTowardsMax tracks the number of times the JobSet has restarted that counts towards the maximum allowed number of restarts.", alias="restartsCountTowardsMax")
-    synced_epoch: Optional[StrictInt] = Field(default=None, alias="syncedEpoch")
+    synced_epoch: Optional[StrictInt] = Field(default=None, description="Part of in place restart The most recent synced epoch of the JobSet workload Pods that have an epoch equal to this value should lift their barrier by their agent sidecars to allow the worker containers to start running", alias="syncedEpoch")
     terminal_state: Optional[StrictStr] = Field(default=None, description="terminalState the state of the JobSet when it finishes execution. It can be either Completed or Failed. Otherwise, it is empty by default.", alias="terminalState")
     __properties: ClassVar[List[str]] = ["conditions", "deprecatedEpoch", "replicatedJobsStatus", "restarts", "restartsCountTowardsMax", "syncedEpoch", "terminalState"]
 

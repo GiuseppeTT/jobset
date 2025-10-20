@@ -9553,6 +9553,10 @@ spec:
                 x-kubernetes-list-type: map
               deprecatedEpoch:
                 default: 0
+                description: |-
+                  Part of in place restart
+                  The most recent deprecated epoch of the JobSet workload
+                  Pods that have an epoch smaller than or equal to this value should be restarted in place by their agent sidecars
                 format: int32
                 type: integer
               replicatedJobsStatus:
@@ -9617,6 +9621,10 @@ spec:
                 type: integer
               syncedEpoch:
                 default: 0
+                description: |-
+                  Part of in place restart
+                  The most recent synced epoch of the JobSet workload
+                  Pods that have an epoch equal to this value should lift their barrier by their agent sidecars to allow the worker containers to start running
                 format: int32
                 type: integer
               terminalState:
