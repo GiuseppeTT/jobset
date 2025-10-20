@@ -75,7 +75,8 @@ const (
 	// label/annotation ranging from 0 to annotations[GroupReplicasKey] - 1
 	JobGroupIndexKey string = "jobset.sigs.k8s.io/job-group-index"
 
-	// TODO: Description
+	// Part of in place restart
+	// Annotation value is the current epoch of the worker Pod and should be treated as int32
 	EpochKey string = "jobset.sigs.k8s.io/epoch"
 )
 
@@ -191,12 +192,16 @@ type JobSetStatus struct {
 	// +listMapKey=name
 	ReplicatedJobsStatus []ReplicatedJobStatus `json:"replicatedJobsStatus,omitempty"`
 
-	// TODO: Description
+	// Part of in place restart
+	// The most recent deprecated epoch of the JobSet workload
+	// Pods that have an epoch smaller than or equal to this value should be restarted in place by their agent sidecars
 	// +optional
 	// +kubebuilder:default=0
 	DeprecatedEpoch int32 `json:"deprecatedEpoch,omitempty"`
 
-	// TODO: Description
+	// Part of in place restart
+	// The most recent synced epoch of the JobSet workload
+	// Pods that have an epoch equal to this value should lift their barrier by their agent sidecars to allow the worker containers to start running
 	// +optional
 	// +kubebuilder:default=0
 	SyncedEpoch int32 `json:"syncedEpoch,omitempty"`
@@ -423,7 +428,10 @@ const (
 	// creating new Jobs.
 	BlockingRecreate JobSetRestartStrategy = "BlockingRecreate"
 
-	// TODO: Description
+	// Part of in place restart
+	// Restart JobSet by restarting healthy Pods in place instead of recreating them
+	// If a Pod fails, it will be individually recreated (assumming correct JobTemplate spec)
+	// If a Job fails, it will be individually recreated (along with its child Pods) (assumming correct JobSet spec)
 	InPlaceRestart JobSetRestartStrategy = "InPlaceRestart"
 )
 

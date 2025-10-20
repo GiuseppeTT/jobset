@@ -21,6 +21,7 @@ RUN CGO_ENABLED=${CGO_ENABLED} GOOS=linux GOARCH=${TARGETARCH} go build -o /agen
 ###############################################################################
 # Final image
 FROM --platform=${BUILDPLATFORM} ${BASE_IMAGE}
+
 WORKDIR /
 
 RUN apk add --no-cache bash

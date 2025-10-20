@@ -63,7 +63,7 @@ func getjobSetClient() *jobSetClientSet.Clientset {
 	}
 	jobSetClient, err := jobSetClientSet.NewForConfig(config)
 	if err != nil {
-		log.Fatalf("ERROR: Failed to create JobSe Kubernetes client: %v", err)
+		log.Fatalf("ERROR: Failed to create JobSet Kubernetes client: %v", err)
 	}
 	return jobSetClient
 }
@@ -195,7 +195,7 @@ func (a *Agent) Run() {
 // This is done for scalability
 // Basically, the agents are expected to start running roughtly at the same time, which creates a thundering herd problem
 // By using only a watch instead of a get + watch, we reduce the number of thundering herd problems from two to one
-// On top of that, we also add jitter to starting the watch to mitigate the remaining thundering herd problem
+// On top of that, we also add backoff jitter to creating the watch to mitigate the remaining thundering herd problem
 func (a *Agent) watchParentJobSet() {
 	log.Printf("INFO: Watching parent JobSet '%s/%s'", a.config.Namespace, a.config.JobSetName)
 	for {
@@ -212,7 +212,7 @@ func (a *Agent) watchParentJobSet() {
 	}
 }
 
-// Create a watcher with jitter on **watcher creation**
+// Create a watcher with backoff jitter on **watcher creation**
 // Once the watcher is created, there is no jitter to continiue watching
 // Based on k8s.io/client-go@v0.34.1/gentype/type.go func (c *Client[T]) Watch
 func (a *Agent) createWatcherWithJitter(ctx context.Context) (watch.Interface, error) {
@@ -264,6 +264,8 @@ func (a *Agent) processWatchEvents(watcher watch.Interface) {
 }
 
 func (a *Agent) shouldPatchEpoch() bool {
+	log.Printf("INFO: Checking if should restart")
+	log.Printf("DEBUG: epoch=%d and isEpochPatched=%t", a.epoch, a.isEpochPatched)
 	return !a.isEpochPatched
 }
 
@@ -288,7 +290,7 @@ func (a *Agent) patchEpoch(jobSet *jobsetv1alpha2.JobSet) {
 			log.Printf("INFO: Successfully patched Pod '%s/%s' with epoch '%d'", a.config.Namespace, a.config.PodName, epoch)
 			break
 		}
-		if i == 4 {
+		if i == 4 { // TODO: Extract constant
 			log.Fatalf("ERROR: Failed to patch pod '%s/%s' after 4 attempts: %v", a.config.Namespace, a.config.PodName, err)
 		}
 		sleepDuration := time.Duration(2*(i+1)) * time.Second
