@@ -711,3 +711,17 @@ What other approaches did you consider, and why did you rule them out? These do
 not need to be as detailed as the proposal, but should include enough
 information to express the idea and why it was not acceptable.
 -->
+
+## Future work
+
+### Recreate only failed Jobs
+
+When the JobSet failure policy is updated to support the recreation of only failed Jobs. In place restart should be updated to support it.
+
+### Speed up failure detection
+
+In the proposed design, the JobSet controller can only detect that a failure occurred when the agent sidecar of the failed worker is started again and updates the epoch annotation. A best effort optimization can be done by triggering a group restart when any worker container of the most recent epoch terminates. This optimization saves the time between the worker container failing and its agent sidecar starting again.
+
+### Restart only specified containers to skip the overhead of recreating all watches
+
+The proposed [RestartPod action](https://docs.google.com/document/d/1UmJHJzdmMA1hWwkoP1f3rG9nS0oZ2cRcOx8rO8MsExA/edit?usp=sharing&resourcekey=0-OuKspBji_1KJlj2JbnZkgQ) can only support restarting all containers, but a future expansion to the `restartPolicyRules` API can be made to allow only a few specified containers to be restarted. This allows for the agent sidecar to avoid being terminated in an on demand in place restart, which skips the overhead of recreating all watches.
