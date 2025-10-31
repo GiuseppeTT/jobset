@@ -495,17 +495,124 @@ const (
 )
 ```
 
+### Implementation - Documentation
+
+In place restart is a complex feature with a complex set up. Therefore, we propose to add documentation to the JobSet website to explain the feature, its requirements and set up.
+
 ### Implementation - Webhook validation
 
-TODO.
+When in place restart is enabled (i.e., the field `jobSet.spec.failurePolicy.restartStrategy` is set to `InPlaceRestart`), the following should be validated by the JobSet webhook:
 
-### Implementation - JobSet controller
-
-TODO.
+* `jobSet.spec.replicatedJobs[].template.spec.backOffLimit` should be set to `MaxInt32` (i.e., `2147483647`) to avoid unnecessarily failing Jobs if a child Pod fails individually or a Pod is restarted in place  
+* `jobSet.spec.replicatedJobs[].template.spec.podReplacementPolicy` should be set to `Failed` to make sure the replacement Pod is created only after the original Pod has fully failed  
+* `jobSet.spec.replicatedJobs[].template.spec.template.spec.initContainers` should contain the agent sidecar to handle in place restart operations at the worker Pod level for the JobSet controller. This is partially verified by checking for the existence of a sidecar that contains the `RestartPod` rule
 
 ### Implementation - Agent sidecar
 
-TODO.
+The only way to trigger the `RestartPod` action on demmand is by making one container exit with a specified exit code. Therefore, we propose to add a new container image that will be buildable from new code in the JobSet repo. The container should be added by the user to the JobSet manifest as the “agent sidecar”. The agent sidecar is responsible for handling in place restart operations at the worker Pod level for the JobSet controller.
+
+The high level structure of the agent sidecar is the following.
+
+```python
+# Initialize
+parentJobSet = getJobSet(env.namespace, env.jobSetName)
+mostRecentSyncedEpoch = jobset.status.syncedEpoch
+epoch = mostRecentSyncedEpoch + 1
+patch = {"metadata" : {"annotations" : {"jobset.sigs.k8s.io/epoch" : epoch}}}
+patchPod(env.namespace, env.podName, patch)
+
+# Watch
+for event in watchJobSet(env.namespace, env.jobSetName):
+  mostRecentDeprecatedEpoch = event.jobSet.status.deprecatedEpoch
+  mostRecentSyncedEpoch = event.jobSet.status.syncedEpoch
+
+  # Check if Pod must be restarted in place because its epoch has been deprecated
+  # If so, exit special exit code to trigger RestartPod action
+  if epoch <= mostRecentDeprecatedEpoch:
+    exit(env.restartInPlaceExitCode)
+
+  # Check if Pod barrier must be lifted because its epoch has been marked as synced
+  # If so, create endpoint "/barrier-is-lifted" to succeed startup probe 
+  if epoch == mostRecentSyncedEpoch:
+    createEndpoint("/barrier-is-lifted") # Idempotent
+```
+
+The highlights are:
+
+- Calculate the Pod epoch at start up as `jobSet.status.syncedEpoch + 1`. This makes sure the worker container will start running only when the JobSet controller updates `jobSet.status.syncedEpoch`. This is done only when all worker Pods are at the same epoch
+- Restart the Pod in place if its epoch has been deprecated by `checking epoch <= jobSet.status.deprecatedEpoch`. This is done only when a group restart is necessary
+- Lift the Pod barrier if its epoch has been marked as synced by checking `epoch == mostRecentSyncedEpoch`. This is done only when all worker Pods are at the same epoch
+
+### Implementation - JobSet controller
+
+The changes to the JobSet controller are responsible for orchestrating the group restarts of JobSet workloads when using in place restart. This boils down to updating the `jobSet.status.deprecatedEpoch` and `jobSet.status.syncedEpoch` fields based on the epochs of the worker Pods. 
+
+The high level structure of the changes to the JobSet reconciliation are the following.
+
+```python
+# Reconcile JobSet
+def reconcile(jobSet):
+  # Current code
+  # ...
+
+  # New code
+  if isInPlaceRestartEnabled(jobSet):
+    reconcileEpochs(jobSet)
+
+# Check if in place restart is enabled
+def isInPlaceRestartEnabled(jobSet):
+  return jobSet.spec.failurePolicy.restartStrategy == "InPlaceRestart"
+
+# Reconcile only in place restart fields
+def reconcileEpochs(jobSet):
+  childPods = listChildPods(jobSet.metadata.namespace, jobSet.metadata.name)
+  epochs = extractEpochs(childPods)
+  expectedEpochLength = countExpectedChildPods(jobSet)
+
+  # Check if all worker Pods are at the same epoch
+  # If so, make sure syncedEpoch is equal to this common value
+  # (represented here by `generations[0]`)
+  # This makes sure the Pod barriers are lifted
+  if len(epochs) == expectedEpochsLength and allEqual(epochs):
+    jobSet.status.syncedEpoch = epochs[0] # Idempotent
+
+  # Otherwise, it means that the worker Pods are not in sync
+  # If so, make sure deprecatedEpoch is equal to max(epochs) - 1
+  # This makes sure all Pods that are not at the last epoch will be restarted in place
+  else:
+    jobSet.status.deprecatedEpoch = max(epochs) - 1 # Idempotent
+
+# Extract values of jobset.sigs.k8s.io/epoch annotations
+def extractEpochs(pods):
+  epochs = []
+  for pod in pods:
+    rawEpoch = pod.metadata.annotations["jobset.sigs.k8s.io/epoch"]
+    epoch = int(rawEpoch)
+    epochs.append(epoch)
+
+  return epochs
+
+# Count expected number of child Pods
+def countExpectedChildPods(jobSet):
+  count = 0
+  for replicatedJob in jobSet.spec.replicatedJobs:
+    jobTemplate = replicatedJob.template
+    count += replicatedJob.replicas * jobTemplate.spec.parallelism
+
+  return count
+```
+
+The highlights are:
+
+* Only run in place restart logic for JobSet objects that have in place restart enabled (i.e., the field `jobSet.spec.failurePolicy.restartStrategy` is set to `InPlaceRestart`)  
+* If all child Pods exist and have the same epoch, it means they are in sync and should have their barriers lifted, so set `jobSet.status.syncedEpoch = epochs[0]` (equivalent to `jobSet.status.syncedEpoch += 1`). The agent sidecars will get this new synced epoch value and lift their barriers  
+* If the Pods are still not in sync (there is a mismatch in their epochs), make sure to deprecate all epochs that are not the most recent with `jobSet.status.deprecatedEpoch = max(epochs) - 1` (equivalent to `syncedEpoch`). This makes sure all agent sidecars that are not at the most recent epoch will restart in place to reach the new epoch
+
+Besides the mentioned changes to the reconciliation loop, we also require to:
+
+* Change the JobSet controller to watch child Pods for reconciliation  
+* Change the JobSet controller to index child Pods for efficient listing  
+* If the worker epochs ever exceed `jobset.spec.failurePolicy.maxRestarts`, fail the JobSet
 
 ### Test Plan
 
