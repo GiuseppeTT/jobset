@@ -148,6 +148,14 @@ The "Design Details" section below is for the real
 nitty-gritty.
 -->
 
+We propose to introduce a new restart strategy to JobSet called `InPlaceRestart`. When enabled, this strategy will recover from failures by restarting the healthy Pods in place and recreating the Failed Pods (expected to be none or only a few in the case of failed Nodes). 
+
+This is achieved by 3 main changes:
+
+- Forcing `backoffLimit = 2147483647` (`MaxInt32`) so that Pod failures lead to individual Pod recreations instead of Job recreations
+- Adding a new "agent" sidecar to be used only with `InPlaceRestart`.  Its objective is to restart its Pod in place on demmand by exiting special exit codes to trigger the `RestartPod` action
+- Changing the JobSet controller to support the `InPlaceRestart` strategy, for instance by broadcasting restart signals to the agent sidecars
+
 ### User Stories (Optional)
 
 <!--
@@ -157,9 +165,200 @@ the system. The goal here is to make this feel real for users without getting
 bogged down.
 -->
 
-#### Story 1
+#### Story 1: Fast Recovery for Large Scale ML Training
 
-#### Story 2
+As a user running large scale ML training workloads on thousands of expensive accelerator Nodes, I face frequent recoverable failures. Each failure triggers a full JobSet restart, which takes several minutes to recreate all Pods,  leading to significant downtime and wasted cost. I want to configure my JobSet to recover from these failures in seconds, not minutes, by restarting the worker Pods in place.
+
+**Example JobSet Configuration for this use case**:
+
+```yaml
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: jobset-example-in-place-restart
+  annotations:
+    # Force 1 Job per Node pool
+    alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+spec:
+  failurePolicy:
+    maxRestarts: ... # Maximum number of full restarts
+    restartStrategy: InPlaceRestart # Enable in place restart
+  replicatedJobs:
+  - name: workers
+    replicas: ... # Number of Node pools
+    template:
+      spec:
+        completions: ... # Number of Nodes per Node pool
+        parallelism: ... # Number of Nodes per Node pool
+        backoffLimit: 2147483647 # MaxInt32. Avoid full recreation by not failing Jobs due to failed Pods and containers
+        podReplacementPolicy: Failed # Make sure the replacement Pod is created only after the original has fully failed
+        template:
+          spec:
+            initContainers:
+            # Agent sidecar
+            - name: agent
+              image: ... # Should be buildable from new code in the JobSet repo
+              # Restart Pod in place if agent exits with exit code X
+              # Otherwise, fail Pod
+              restartPolicy: Always # Necessary for sidecar
+              restartPolicyRules:
+              - action: RestartPod
+                exitCodes:
+                  operator: In
+                  values: [X]
+              - action: Terminate
+                exitCodes:
+                  operator: NoIn
+                  values: [X]
+              # Barrier
+              # Allow worker container to start only when the agent sidecar creates this endpoint
+              startupProbe:
+                httpGet:
+                  path: /barrier-is-lifted
+                  port: 8080
+                failureThreshold: ...
+                periodSeconds: 1
+              env:
+                # Required env variables for agent sidecar
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: JOBSET_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-name']
+                # Optional env variables for agent sidecar
+                # Customize the exit code of agent sidecar for triggering RestartPod
+                - name: RESTART_POD_IN_PLACE_EXIT_CODE
+                  value: "X"
+            containers:
+            # Worker container
+            - name: worker
+              # Restart Pod in place if worker exits non-zero exit code
+              # Otherwise succeed the Pod
+              restartPolicy: Never
+              restartPolicyRules:
+              - action: RestartPod
+                exitCodes:
+                  operator: NotIn
+                  values: [0]
+            # Force 1 worker Pod per Node
+            resources:
+              requests:
+                google.com/tpu: 4 # Use all TPU chips in the Node
+```
+
+#### Story 2: Combining In Place Restart with Immediate Failure for Unrecoverable Errors
+
+As a user, my training workload can fail for two reasons: recoverable issues and fatal non-retriable issues (e.g., a misconfigured dataset path) that causes the worker to exit with exit code `Y`. I want to use fast in place restarts for transient issues but fail the entire JobSet immediately if the non-retriable errors occur to avoid wasting resources on pointless restarts.
+
+**Example JobSet Configuration for this use case**:
+
+```yaml
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: jobset-example-in-place-restart-failure-policy
+  annotations:
+    # Force 1 Job per Node pool
+    alpha.jobset.sigs.k8s.io/exclusive-topology: cloud.google.com/gke-nodepool
+Spec:
+  failurePolicy:
+    maxRestarts: ... # Maximum number of full restarts
+    restartStrategy: InPlaceRestart # Enable in place restart
+    # Fail JobSet if Job fails with reason PodFailurePolicy
+    # Equivalently, fail JobSet if a worker container exits with exit code Y
+    rules:
+    - action: FailJobSet
+      onJobFailureReasons:
+      - PodFailurePolicy
+  replicatedJobs:
+  - name: workers
+    replicas: ... # Number of Node pools
+    template:
+      spec:
+        completions: ... # Number of Nodes per Node pool
+        parallelism: ... # Number of Nodes per Node pool
+        backoffLimit: 2147483647 # MaxInt32. Required to not fail Job due to failed Pods and intentional container restarts
+        podReplacementPolicy: Failed # Make sure the replacement Pod is created only after the original has fully failed
+        # Fail Job with reason PodFailurePolicy if a worker container exits with exit code Y
+        podFailurePolicy:
+          rules:
+          - action: FailJob
+            onExitCodes:
+              containerName: worker
+              operator: In
+              values: [Y]
+        template:
+          spec:
+            initContainers:
+            # Agent sidecar
+            - name: agent
+              image: ... # Should be buildable from new code in the JobSet repo
+              # Restart Pod in place if agent exits with exit code X
+              # Otherwise, fail Pod
+              restartPolicy: Always # Necessary for sidecar
+              restartPolicyRules:
+              - action: RestartPod
+                exitCodes:
+                  operator: In
+                  values: [X]
+              - action: Terminate
+                exitCodes:
+                  operator: NoIn
+                  values: [X]
+              # Allow worker container to start only when the agent container creates this endpoint
+              startupProbe:
+                httpGet:
+                  path: /barrier-is-lifted
+                  port: 8080
+                failureThreshold: ...
+                periodSeconds: 1
+              env:
+                # Required env variables for agent sidecar
+                - name: NAMESPACE
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.namespace
+                - name: POD_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.name
+                - name: JOBSET_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: metadata.annotations['jobset.sigs.k8s.io/jobset-name']
+                # Optional env variables for agent sidecar
+                # Customize the exit code of agent sidecar for triggering RestartPod
+                - name: RESTART_POD_IN_PLACE_EXIT_CODE
+                  value: "X"
+            containers:
+            # Worker container
+            - name: worker
+              # Complete Pod if worker exits 0
+              # Fail Pod if worker exits with exit code Y or Z
+              # Otherwise, restart Pod in place
+              restartPolicy: Never
+              restartPolicyRules:
+              - action: Terminate
+                exitCodes:
+                  operator: In
+                  values: [Y, Z]
+              - action: RestartPod
+                exitCodes:
+                  operator: NotIn
+                  values: [0, Y, Z]
+              ...
+            # Force 1 worker Pod per Node
+            resources:
+              requests:
+                google.com/tpu: 4 # Use all TPU chips in the Node
+```
 
 ### Notes/Constraints/Caveats (Optional)
 
