@@ -712,7 +712,31 @@ not need to be as detailed as the proposal, but should include enough
 information to express the idea and why it was not acceptable.
 -->
 
+### Use the JobSet controller to directly restart the Pods in place instead of using the agent sidecar
+
+Currently, there is no way to do that. The `RestartPod` action can only be triggered by a container exiting with a specified exit code. Alternatively, a new ideal upstream API could be created but the `RestartPod` action is the path of least resistance.
+
+### Use gRPC instead of the API server to establish communication between the JobSet controller and the agent sidecars
+
+Using the API server with a declarative Pod annotation for the epoch is better practice from the [Kubernetes API conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#spec-and-status).
+
+### Use the annotation `jobset.sigs.k8s.io/restart-attempt` instead of `jobset.sigs.k8s.io/epoch`
+
+The annotation `jobset.sigs.k8s.io/restart-attempt` is technically written by the JobSet controller through the Pod template, so changing it with the agent sidecar would be an anti-pattern. Besides, the annotation `jobset.sigs.k8s.io/restart-attempt` in Pods is already heavily used for observability and changing its semantics would also be problematic.
+
+### Make the barrier optional
+
+This is technically possible, but it adds little overhead while allowing the design to make less assumptions over the worker containers.
+
+### Restart only specified Pods instead of all of them
+
+Currently JobSet only supports restarting the whole workload. Partial restart like restarting only a single Job or a group of ReplicatedJobs is desirable but it is still being [discussed upstream](https://github.com/kubernetes-sigs/jobset/issues/918). 
+
 ## Future work
+
+### Inject the agent sidecars to simplify the JobSet spec
+
+The addition of agent sidecar makes the JobSet spec long and complex. It could be added by default and have a toggle to disable this behavior.
 
 ### Recreate only failed Jobs
 
