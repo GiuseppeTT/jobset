@@ -392,6 +392,121 @@ required) or even code snippets. If there's any ambiguity about HOW your
 proposal will be implemented, this is the place to discuss them.
 -->
 
+Refer to the [design doc](https://docs.google.com/document/d/16zexVooHKPc80F4dVtUjDYK9DOpkVPRNfSv0zRtfFpk/edit?usp=sharing) for more details.
+
+### API
+
+Changes to the JobSet spec.
+
+```go
+// README: No change. Only here for reference.
+type FailurePolicy struct {
+  // Limit on the number of JobSet restarts.
+  MaxRestarts int32 `json:"maxRestarts,omitempty"`
+
+  // Strategy to use when restarting the JobSet.
+  //
+  // +optional
+  // +kubebuilder:default=Recreate
+  RestartStrategy JobSetRestartStrategy `json:"restartStrategy,omitempty"`
+
+  // List of failure policy rules for the JobSet.
+  //
+  // For a given Job failure, the rules will be evaluated in order,
+  // and only the first matching rule will be executed.
+  //
+  // If no matching rule is found, the RestartJobSet action is applied.
+  Rules []FailurePolicyRule `json:"rules,omitempty"`
+}
+
+// README: Add `InPlaceRestart` to valid enum values in validation.
+//
+// +kubebuilder:validation:Enum=Recreate;BlockingRecreate;InPlaceRestart
+type JobSetRestartStrategy string
+
+// README: Add new value `InPlaceRestart`.
+const (
+  // Restart the JobSet by recreating all Jobs.
+  //
+  // Each Job is recreated as soon as its previous iteration (and its Pods) is deleted.
+  Recreate JobSetRestartStrategy = "Recreate"
+
+  // Restart the JobSet by recreating the Jobs.
+  // 
+  // Ensures that all Jobs (and their Pods) from the previous iteration are deleted 
+  // before creating new Jobs.
+  BlockingRecreate JobSetRestartStrategy = "BlockingRecreate"
+
+  // When no Job has failed, restart the JobSet by restarting healthy Pods in place 
+  // and recreating failed Pods.
+  //
+  // When a Job has failed, fall back to action `Recreate` and execute the matching failure policy rule.
+  InPlaceRestart JobSetRestartStrategy = "InPlaceRestart"
+)
+```
+
+Changes to the JobSet status.
+
+```go
+// README: Add new fields `deprecatedEpoch` and `syncedEpoch`.
+type JobSetStatus struct {
+  // ... Other fields
+
+  // The most recent deprecated epoch of the JobSet.
+  //
+  // Healthy Pods that have an epoch smaller than or equal to this value should be restarted in place.
+  //
+  // This is written by the JobSet controller and read by the agent sidecars.
+  //
+  // +optional
+  // +kubebuilder:default=0
+  DeprecatedEpoch int32 `json:"deprecatedEpoch,omitempty"`
+
+  // The most recent synced epoch of the JobSet.
+  //
+  // Pods that have an epoch equal to this value should lift their barrier to allow the worker containers to start running
+  //
+  // This is written by the JobSet controller and read by the agent sidecars.
+  //
+  // +optional
+  // +kubebuilder:default=0
+  SyncedEpoch int32 `json:"syncedEpoch,omitempty"`
+}
+```
+
+Changes to the reserved annotations.
+
+```go
+const (
+  // ... Other reserved labels and annotations such as `jobset.sigs.k8s.io/jobset-name`
+  
+  // Meant to be use as a Pod annotation for worker Pods.
+  //
+  // Its value is the epoch of the worker Pod and should be treated as int32.
+  //
+  // This is written by the agent sidecar and read by the JobSet controller.
+  //
+  // If the epoch of any worker Pod exceeds jobSet.spec.failurePolicy.maxRestarts, fail the JobSet.
+  //
+  // If the epoch of the worker Pod is smaller than or equal to `deprecatedEpoch`, restart the Pod in place.
+  //
+  // If the epoch of the worker Pod is qual to `syncedEpoch`, lift the Pod barrier to allow the worker container to start running.
+  EpochKey string = "jobset.sigs.k8s.io/epoch"
+)
+```
+
+### Implementation - Webhook validation
+
+TODO.
+
+### Implementation - JobSet controller
+
+TODO.
+
+### Implementation - Agent sidecar
+
+TODO.
+
 ### Test Plan
 
 <!--
