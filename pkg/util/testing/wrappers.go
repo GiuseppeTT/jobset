@@ -314,6 +314,18 @@ func (j *JobTemplateWrapper) Obj() batchv1.JobTemplateSpec {
 	return j.JobTemplateSpec
 }
 
+// Parallelism sets the job spec parallelism.
+func (j *JobTemplateWrapper) Parallelism(parallelism int32) *JobTemplateWrapper {
+	j.Spec.Parallelism = ptr.To(parallelism)
+	return j
+}
+
+// Completions sets the job spec completions.
+func (j *JobTemplateWrapper) Completions(completions int32) *JobTemplateWrapper {
+	j.Spec.Completions = ptr.To(completions)
+	return j
+}
+
 // JobWrapper wraps a Job.
 type JobWrapper struct {
 	batchv1.Job

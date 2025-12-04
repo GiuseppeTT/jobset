@@ -224,6 +224,14 @@ func (r *JobSetReconciler) reconcile(ctx context.Context, js *jobset.JobSet, upd
 			return ctrl.Result{}, err
 		}
 	}
+
+	if features.Enabled(features.InPlaceRestart) && isInPlaceRestartStrategy(js) {
+		if err := r.reconcileInPlaceRestart(ctx, js, updateStatusOpts); err != nil {
+			log.Error(err, "reconciling in-place restart")
+			return ctrl.Result{}, err
+		}
+	}
+
 	return ctrl.Result{}, nil
 }
 
