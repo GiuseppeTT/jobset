@@ -165,7 +165,7 @@ func (j *jobSetWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) 
 	var allErrs []error
 
 	// Validate InPlaceRestart feature gate.
-	// The API changes should be used only when the feature gate is enabled.
+	// The in-place restart API should be used only when the feature gate is enabled.
 	if !features.Enabled(features.InPlaceRestart) {
 		if js.Spec.FailurePolicy != nil && js.Spec.FailurePolicy.RestartStrategy == jobset.InPlaceRestart {
 			allErrs = append(allErrs, fmt.Errorf("InPlaceRestart restart strategy is not supported when InPlaceRestart feature gate is disabled"))
@@ -179,7 +179,7 @@ func (j *jobSetWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) 
 	} 
 
 	// Validate InPlaceRestart.
-	// If the feature gate is enabled, make sure the API is used correctly.
+	// If the feature gate is enabled, make sure the in-place restart API is used correctly.
 	if features.Enabled(features.InPlaceRestart) && js.Spec.FailurePolicy != nil && js.Spec.FailurePolicy.RestartStrategy == jobset.InPlaceRestart {
 		allErrs = append(allErrs, validateCreateInPlaceRestart(js)...)
 	}
