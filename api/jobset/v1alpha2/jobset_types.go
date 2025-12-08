@@ -76,14 +76,14 @@ const (
 	JobGroupIndexKey string = "jobset.sigs.k8s.io/job-group-index"
 
 	// InPlaceRestartAttemptKey is an annotation set to the in-place restart
-	// attempt of the Pod. It is written by the agent sidecar and should be
+	// attempt of the Pod. It is written by the agent sidecar. It should be
 	// treated as *int32 (nil if missing) and the minimum value is 0. If the
 	// in-place restart attempt of any Pod exceeds jobSet.spec.failurePolicy.maxRestarts,
 	// the JobSet controller should fail the JobSet. If the in-place restart
 	// attempt of the Pod is smaller than or equal to jobSet.status.previousInPlaceRestartAttempt,
 	// the agent sidecar should restart its Pod in-place. If the in-place restart
 	// attempt of the Pod is equal to jobSet.status.currentInPlaceRestartAttempt,
-	// the agent sidecar should lift its Pod barrier to allow the worker
+	// the agent sidecar should lift its barrier to allow the worker
 	// container to start running.
 	InPlaceRestartAttemptKey string = "jobset.sigs.k8s.io/in-place-restart-attempt"
 )
@@ -212,7 +212,7 @@ type JobSetStatus struct {
 	// currentInPlaceRestartAttempt tracks the current in-place restart attempt
 	// of the JobSet. It is read by the agent sidecar. If the in-place restart
 	// attempt of the Pod is equal to currentInPlaceRestartAttempt, the agent
-	// sidecar should lift its Pod barrier to allow the worker container to
+	// sidecar should lift its barrier to allow the worker container to
 	// start running.
 	// +optional
 	// +kubebuilder:validation:Minimum=0
