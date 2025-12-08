@@ -511,6 +511,12 @@ func (p *PodWrapper) SetConditions(conditions []corev1.PodCondition) *PodWrapper
 	return p
 }
 
+// SetStatus sets the value of the pod.status.
+func (p *PodWrapper) SetStatus(status corev1.PodStatus) *PodWrapper {
+	p.Pod.Status = status
+	return p
+}
+
 // NodeSelector sets the value of the pod.spec.nodeSelector.
 func (p *PodWrapper) NodeSelector(nodeSelector map[string]string) *PodWrapper {
 	p.Spec.NodeSelector = nodeSelector
