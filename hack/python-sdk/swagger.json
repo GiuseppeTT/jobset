@@ -243,7 +243,7 @@
           "x-kubernetes-list-type": "map"
         },
         "currentInPlaceRestartAttempt": {
-          "description": "currentInPlaceRestartAttempt tracks the current in-place restart attempt of the JobSet. It is read by the agent sidecar. If the in-place restart attempt of the Pod is equal to currentInPlaceRestartAttempt, the agent sidecar should lift its Pod barrier to allow the worker container to start running.",
+          "description": "currentInPlaceRestartAttempt tracks the current in-place restart attempt of the JobSet. It is read by the agent sidecar. If the in-place restart attempt of the Pod is equal to currentInPlaceRestartAttempt, the agent sidecar should lift its barrier to allow the worker container to start running.",
           "type": "integer",
           "format": "int32"
         },
