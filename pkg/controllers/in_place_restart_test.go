@@ -67,7 +67,6 @@ func TestIsInPlaceRestartStrategy(t *testing.T) {
 	}
 }
 
-
 func TestGetMaxContainerRestartCount(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -147,7 +146,6 @@ func TestGetMaxContainerRestartCount(t *testing.T) {
 		})
 	}
 }
-
 
 func TestGetInPlaceRestartAttempts(t *testing.T) {
 	tests := []struct {
@@ -633,7 +631,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 		wantFailed       bool
 	}{
 		{
-			name: "container restart count > max restarts",
+			name: "JobSet failed because a container exceeded max restarts",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     1,
@@ -658,7 +656,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: true,
 		},
 		{
-			name: "pod annotation > max restarts",
+			name: "JobSet failed because a Pod in-place restart attempt exceeded max restarts",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     1,
@@ -680,7 +678,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: true,
 		},
 		{
-			name: "sync (init): all pods 0, status nil -> status 0",
+			name: "Current in-place restart attempt was updated because all Pods are in sync (Pod synced for the first time ever)",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -706,7 +704,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: true,
 		},
 		{
-			name: "sync (restart): all pods 1, status 0 -> status 1",
+			name: "Current in-place restart attempt was updated because all Pods are in sync (Pod just finished syncing after the first restart)",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -736,7 +734,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: true,
 		},
 		{
-			name: "no pods",
+			name: "No need to fail JobSet or update status (JobSet just got created and is waiting for Pods to become in sync)",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -753,7 +751,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: false,
 		},
 		{
-			name: "partial pods (1/2)",
+			name: "No need to fail JobSet or update status (JobSet just got created and is waiting for Pods to become in sync)",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -774,7 +772,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: false,
 		},
 		{
-			name: "partial annotations (0, nil)",
+			name: "No need to fail JobSet or update status (JobSet just got created and is waiting for Pods to become in sync)",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -798,7 +796,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: false,
 		},
 		{
-			name: "no annotations (nil, nil)",
+			name: "No need to fail JobSet or update status (JobSet just got created and is waiting for Pods to become in sync)",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -822,7 +820,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: false,
 		},
 		{
-			name: "one restarted (0, 1) -> update previous to 0",
+			name: "Updated previous in-place restart attempt because all Pods were in sync but one of them just restarted",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -851,7 +849,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 			wantShouldUpdate: true,
 		},
 		{
-			name: "one restarted (1, 2) -> update previous to 1",
+			name: "Updated previous in-place restart attempt because all Pods were in sync but one of them just restarted",
 			js: testutils.MakeJobSet("test-jobset", "default").
 				FailurePolicy(&jobset.FailurePolicy{
 					MaxRestarts:     3,
@@ -900,7 +898,7 @@ func TestReconcileInPlaceRestart(t *testing.T) {
 
 			r := &JobSetReconciler{Client: fakeClient}
 			updateStatusOpts := &statusUpdateOpts{}
-			
+
 			// Use a logger that doesn't print to stdout
 			ctx = ctrl.LoggerInto(ctx, logr.Discard())
 
