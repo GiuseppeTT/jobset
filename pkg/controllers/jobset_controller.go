@@ -243,7 +243,7 @@ func (r *JobSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{})
 
 	// Watch Pods if in-place restart feature is enabled.
-	// This triggers the JobSet controller to reconcile when a Pod is created / modified / deleted.
+	// This triggers the JobSet controller to reconcile when an associated Pod is created / modified / deleted.
 	if features.Enabled(features.InPlaceRestart) {
 		controllerBuilder = controllerBuilder.Watches(
 			&corev1.Pod{},
@@ -284,7 +284,7 @@ func SetupJobSetIndexes(ctx context.Context, indexer client.FieldIndexer) error 
 	}
 
 	// Index Pods by namespaced JobSet name if in-place restart feature is enabled.
-	// This is used to efficiently find all pods associated with a JobSet.
+	// This is used to efficiently find all Pods associated with a JobSet.
 	if features.Enabled(features.InPlaceRestart) {
 		err = indexer.IndexField(ctx, &corev1.Pod{}, constants.AssociatedJobSetKey, func(obj client.Object) []string {
 			pod := obj.(*corev1.Pod)

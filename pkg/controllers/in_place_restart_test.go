@@ -207,7 +207,7 @@ func TestGetInPlaceRestartAttempts(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := getInPlaceRestartAttempts(tc.childPods)
+			got, err := getPodInPlaceRestartAttempts(tc.childPods)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("getInPlaceRestartAttempts() error = %v, wantErr %v", err, tc.wantErr)
 				return
@@ -366,7 +366,7 @@ func TestGetExpectedInPlaceRestartAttemptsLength(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := getExpectedInPlaceRestartAttemptsLength(tc.js)
+			got, err := getExpectedPodInPlaceRestartAttemptsLength(tc.js)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("getExpectedInPlaceRestartAttemptsLength() error = %v, wantErr %v", err, tc.wantErr)
 				return

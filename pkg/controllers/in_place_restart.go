@@ -29,15 +29,17 @@ import (
 	"sigs.k8s.io/jobset/pkg/constants"
 )
 
+// isInPlaceRestartStrategy returns true if the JobSet is configured to use the in-place restart strategy.
 func isInPlaceRestartStrategy(js *jobset.JobSet) bool {
-	return js.Spec.FailurePolicy.RestartStrategy == jobset.InPlaceRestart
+	return js.Spec.FailurePolicy != nil && js.Spec.FailurePolicy.RestartStrategy == jobset.InPlaceRestart
 }
 
+// reconcileInPlaceRestart reconciles the in-place restart for the JobSet.
 func (r *JobSetReconciler) reconcileInPlaceRestart(ctx context.Context, js *jobset.JobSet, updateStatusOpts *statusUpdateOpts) error {
 	log := ctrl.LoggerFrom(ctx)
 	log.V(2).Info("Reconciling in-place restart")
 
-	// Get all associated Pods
+	// Get Pods associated with this JobSet
 	associatedPods, err := r.getAssociatedPods(ctx, js)
 	if err != nil {
 		log.Error(err, "getting associated pods")
@@ -53,45 +55,45 @@ func (r *JobSetReconciler) reconcileInPlaceRestart(ctx context.Context, js *jobs
 		return nil
 	}
 
-	// Extract in-place restart attempts from associated Pods
-	inPlaceRestartAttempts, err := getInPlaceRestartAttempts(associatedPods)
+	// Extract Pod in-place restart attempts from associated Pods
+	podInPlaceRestartAttempts, err := getPodInPlaceRestartAttempts(associatedPods)
 	if err != nil {
-		log.Error(err, "getting in-place restart attempts")
+		log.Error(err, "getting Pod in-place restart attempts")
 		return err
 	}
 
-	// Fail JobSet if any in-place restart attempt that counts towards max restarts exceeds max restarts
-	if exceededMaxRestarts(js, inPlaceRestartAttempts) {
+	// Fail JobSet if any Pod in-place restart attempt that counts towards max restarts exceeds max restarts
+	if exceededMaxRestarts(js, podInPlaceRestartAttempts) {
 		log.Info("JobSet has exceeded max restarts during in-place restart, failing JobSet")
 		setJobSetFailedCondition(js, constants.ReachedMaxRestartsReason, constants.ReachedMaxRestartsMessage, updateStatusOpts)
 		return nil
 	}
 
-	// Get expected number of in-place restart attempts
-	expectedInPlaceRestartAttemptsLength, err := getExpectedInPlaceRestartAttemptsLength(js)
+	// Get expected number of Pod in-place restart attempts
+	expectedPodInPlaceRestartAttemptsLength, err := getExpectedPodInPlaceRestartAttemptsLength(js)
 	if err != nil {
-		log.Error(err, "getting expected in-place restart attempts length")
+		log.Error(err, "getting expected Pod in-place restart attempts length")
 		return err
 	}
 
 	// If all associated Pods are at the same in-place restart attempt, set the current in-place restart attempt to the common value
 	// This will make the agent sidecars lift their barriers to allow the worker container to start running
 	// This is idempotent
-	if len(inPlaceRestartAttempts) == expectedInPlaceRestartAttemptsLength && allEqual(inPlaceRestartAttempts) {
-		updateCurrentInPlaceRestartAttempt(log, js, inPlaceRestartAttempts, updateStatusOpts)
+	if len(podInPlaceRestartAttempts) == expectedPodInPlaceRestartAttemptsLength && allEqual(podInPlaceRestartAttempts) {
+		updateCurrentInPlaceRestartAttempt(log, js, podInPlaceRestartAttempts, updateStatusOpts)
 		return nil
 	}
 
-	// Otherwise, if there is no in-place restart attempt or if the maximum in-place restart attempt is 0, ignore
+	// Otherwise, if there is no Pod in-place restart attempt or if the maximum Pod in-place restart attempt is 0, ignore
 	// This is expected when the JobSet is first created
-	if len(inPlaceRestartAttempts) == 0 || slices.Max(inPlaceRestartAttempts) == 0 {
+	if len(podInPlaceRestartAttempts) == 0 || slices.Max(podInPlaceRestartAttempts) == 0 {
 		return nil
 	}
 
-	// Otherwise, there is a mistmatch in the associated Pod in-place restart attempts, so set the previous in-place restart attempt to the maximum value minus one
-	// This is done to make sure associated Pods not in the latest in-place restart attempt are restarted in place to reach the latest in-place restart attempt
+	// Otherwise, there is a mistmatch in the Pod in-place restart attempts, so set the previous in-place restart attempt to the maximum value minus one
+	// This is done to make sure Pods not in the latest in-place restart attempt are restarted in-place to reach the latest in-place restart attempt
 	// This is idempotent
-	updatePreviousInPlaceRestartAttempt(log, js, inPlaceRestartAttempts, updateStatusOpts)
+	updatePreviousInPlaceRestartAttempt(log, js, podInPlaceRestartAttempts, updateStatusOpts)
 
 	return nil
 }
@@ -108,9 +110,9 @@ func (r *JobSetReconciler) getAssociatedPods(ctx context.Context, js *jobset.Job
 }
 
 // getMaxContainerRestartCount returns the maximum restart count of any container in the associated Pods.
-func getMaxContainerRestartCount(childPods *corev1.PodList) int32 {
+func getMaxContainerRestartCount(associatedPods *corev1.PodList) int32 {
 	maxRestartCount := int32(0)
-	for _, pod := range childPods.Items {
+	for _, pod := range associatedPods.Items {
 		for _, containerStatus := range pod.Status.InitContainerStatuses {
 			if containerStatus.RestartCount > maxRestartCount {
 				maxRestartCount = containerStatus.RestartCount
@@ -125,43 +127,43 @@ func getMaxContainerRestartCount(childPods *corev1.PodList) int32 {
 	return maxRestartCount
 }
 
-// getInPlaceRestartAttempts returns the in-place restart attempts of all pods associated with the JobSet.
-func getInPlaceRestartAttempts(childPods *corev1.PodList) ([]int32, error) {
-	inPlaceRestartAttempts := []int32{}
-	for _, pod := range childPods.Items {
-		rawInPlaceRestartAttempt, ok := pod.Annotations[jobset.InPlaceRestartAttemptKey]
+// getPodInPlaceRestartAttempts returns the in-place restart attempts of all pods associated with the JobSet.
+func getPodInPlaceRestartAttempts(associatedPods *corev1.PodList) ([]int32, error) {
+	podInPlaceRestartAttempts := []int32{}
+	for _, pod := range associatedPods.Items {
+		rawPodInPlaceRestartAttempt, ok := pod.Annotations[jobset.InPlaceRestartAttemptKey]
 		// Skip it if the annotation is missing
 		// The missing annotation might be an error
 		// But it is likely due to the time between the Pod being created and the agent sidecar creating the annotation
 		if !ok {
 			continue
 		}
-		inPlaceRestartAttempt, err := strconv.Atoi(rawInPlaceRestartAttempt)
+		podInPlaceRestartAttempt, err := strconv.Atoi(rawPodInPlaceRestartAttempt)
 		if err != nil {
 			return nil, fmt.Errorf("invalid value for annotation %s, must be integer", jobset.InPlaceRestartAttemptKey)
 		}
-		if inPlaceRestartAttempt < 0 {
+		if podInPlaceRestartAttempt < 0 {
 			return nil, fmt.Errorf("invalid value for annotation %s, must be non-negative integer", jobset.InPlaceRestartAttemptKey)
 		}
-		inPlaceRestartAttempts = append(inPlaceRestartAttempts, int32(inPlaceRestartAttempt))
+		podInPlaceRestartAttempts = append(podInPlaceRestartAttempts, int32(podInPlaceRestartAttempt))
 	}
-	return inPlaceRestartAttempts, nil
+	return podInPlaceRestartAttempts, nil
 }
 
-// exceededMaxRestarts returns true if any in-place restart attempt that counts towards max restarts exceeds max restarts.
-func exceededMaxRestarts(js *jobset.JobSet, inPlaceRestartAttempts []int32) bool {
-	inPlaceRestartAttempt := int32(0)
-	if len(inPlaceRestartAttempts) > 0 {
-		inPlaceRestartAttempt = slices.Max(inPlaceRestartAttempts)
+// exceededMaxRestarts returns true if any Pod in-place restart attempt that counts towards max restarts exceeds max restarts.
+func exceededMaxRestarts(js *jobset.JobSet, podInPlaceRestartAttempts []int32) bool {
+	podInPlaceRestartAttempt := int32(0)
+	if len(podInPlaceRestartAttempts) > 0 {
+		podInPlaceRestartAttempt = slices.Max(podInPlaceRestartAttempts)
 	}
 	uncountedRestarts := js.Status.Restarts - js.Status.RestartsCountTowardsMax
-	inPlaceRestartsCountTowardsMax := inPlaceRestartAttempt - uncountedRestarts
-	return inPlaceRestartsCountTowardsMax > js.Spec.FailurePolicy.MaxRestarts
+	podInPlaceRestartsCountTowardsMax := podInPlaceRestartAttempt - uncountedRestarts
+	return podInPlaceRestartsCountTowardsMax > js.Spec.FailurePolicy.MaxRestarts
 }
 
-// getExpectedInPlaceRestartAttemptsLength returns the expected number of in-place restart attempts for the JobSet.
+// getExpectedPodInPlaceRestartAttemptsLength returns the expected number of Pod in-place restart attempts for the JobSet.
 // This is equal to the expected total number of associated pods in the JobSet.
-func getExpectedInPlaceRestartAttemptsLength(js *jobset.JobSet) (int, error) {
+func getExpectedPodInPlaceRestartAttemptsLength(js *jobset.JobSet) (int, error) {
 	expectedLength := 0
 	for _, rjob := range js.Spec.ReplicatedJobs {
 		jobTemplate := rjob.Template
@@ -187,10 +189,10 @@ func allEqual(values []int32) bool {
 }
 
 // updateCurrentInPlaceRestartAttempt updates the current in-place restart attempt of the JobSet.
-func updateCurrentInPlaceRestartAttempt(log logr.Logger, js *jobset.JobSet, inPlaceRestartAttempts []int32, updateStatusOpts *statusUpdateOpts) {
-	// New value is the common value of all in-place restart attempts
+func updateCurrentInPlaceRestartAttempt(log logr.Logger, js *jobset.JobSet, podInPlaceRestartAttempts []int32, updateStatusOpts *statusUpdateOpts) {
+	// New value is the common value of all Pod in-place restart attempts
 	// Since all values are equal, pick the first one
-	newCurrentInPlaceRestartAttempt := inPlaceRestartAttempts[0]
+	newCurrentInPlaceRestartAttempt := podInPlaceRestartAttempts[0]
 	// If the value didn't change, skip
 	if js.Status.CurrentInPlaceRestartAttempt != nil && *js.Status.CurrentInPlaceRestartAttempt == newCurrentInPlaceRestartAttempt {
 		return
@@ -202,16 +204,16 @@ func updateCurrentInPlaceRestartAttempt(log logr.Logger, js *jobset.JobSet, inPl
 }
 
 // updatePreviousInPlaceRestartAttempt updates the previous in-place restart attempt of the JobSet.
-func updatePreviousInPlaceRestartAttempt(log logr.Logger, js *jobset.JobSet, inPlaceRestartAttempts []int32, updateStatusOpts *statusUpdateOpts) {
-	// slices.Max(inPlaceRestartAttempts) can't be calculated with empty slices
+func updatePreviousInPlaceRestartAttempt(log logr.Logger, js *jobset.JobSet, podInPlaceRestartAttempts []int32, updateStatusOpts *statusUpdateOpts) {
+	// slices.Max(podInPlaceRestartAttempts) can't be calculated with empty slices
 	// This is transient. Eventually the Pods start running and their agents create the annotation
-	if len(inPlaceRestartAttempts) == 0 {
+	if len(podInPlaceRestartAttempts) == 0 {
 		return
 	}
-	// New value is the maximum value of all in-place restart attempts minus one
-	newPreviousInPlaceRestartAttempt := slices.Max(inPlaceRestartAttempts) - 1
+	// New value is the maximum value of all Pod in-place restart attempts minus one
+	newPreviousInPlaceRestartAttempt := slices.Max(podInPlaceRestartAttempts) - 1
 	// If the new value is less than the old value, skip
-	// This might happen while the JobSet is restarting since the Pod with the highest in-place restart attempt might not have been restarted yet
+	// This might happen while the JobSet is restarting since the Pod with the highest in-place restart attempt might not have been fullyrestarted yet
 	if js.Status.PreviousInPlaceRestartAttempt != nil && newPreviousInPlaceRestartAttempt < *js.Status.PreviousInPlaceRestartAttempt {
 		return
 	}
