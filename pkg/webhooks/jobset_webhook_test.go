@@ -2130,7 +2130,11 @@ func TestValidateCreate(t *testing.T) {
 							Replicas:  1,
 							Template: batchv1.JobTemplateSpec{
 								Spec: batchv1.JobSpec{
-									Template: validPodTemplateSpec,
+									Parallelism:          ptr.To[int32](1),
+									Completions:          ptr.To[int32](1),
+									BackoffLimit:         ptr.To[int32](math.MaxInt32),
+									PodReplacementPolicy: ptr.To(batchv1.Failed),
+									Template:             validPodTemplateSpec,
 								},
 							},
 						},
@@ -2142,6 +2146,154 @@ func TestValidateCreate(t *testing.T) {
 				},
 			},
 			want: nil,
+		},
+		{
+			name:                 "InPlaceRestart enabled: backoffLimit is not MaxInt32",
+			enableInPlaceRestart: true,
+			js: &jobset.JobSet{
+				ObjectMeta: validObjectMeta,
+				Spec: jobset.JobSetSpec{
+					SuccessPolicy: &jobset.SuccessPolicy{},
+					FailurePolicy: &jobset.FailurePolicy{
+						RestartStrategy: jobset.InPlaceRestart,
+					},
+					ReplicatedJobs: []jobset.ReplicatedJob{
+						{
+							Name:      "job-1",
+							GroupName: "default",
+							Replicas:  1,
+							Template: batchv1.JobTemplateSpec{
+								Spec: batchv1.JobSpec{
+									Parallelism:          ptr.To[int32](1),
+									Completions:          ptr.To[int32](1),
+									BackoffLimit:         ptr.To[int32](0),
+									PodReplacementPolicy: ptr.To(batchv1.Failed),
+									Template:             validPodTemplateSpec,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: errors.Join(fmt.Errorf("replicatedJob job-1: backoffLimit must be set to 2147483647 (MaxInt32) when in-place restart is enabled")),
+		},
+		{
+			name:                 "InPlaceRestart enabled: podReplacementPolicy is not Failed",
+			enableInPlaceRestart: true,
+			js: &jobset.JobSet{
+				ObjectMeta: validObjectMeta,
+				Spec: jobset.JobSetSpec{
+					SuccessPolicy: &jobset.SuccessPolicy{},
+					FailurePolicy: &jobset.FailurePolicy{
+						RestartStrategy: jobset.InPlaceRestart,
+					},
+					ReplicatedJobs: []jobset.ReplicatedJob{
+						{
+							Name:      "job-1",
+							GroupName: "default",
+							Replicas:  1,
+							Template: batchv1.JobTemplateSpec{
+								Spec: batchv1.JobSpec{
+									Parallelism:          ptr.To[int32](1),
+									Completions:          ptr.To[int32](1),
+									BackoffLimit:         ptr.To[int32](math.MaxInt32),
+									PodReplacementPolicy: ptr.To(batchv1.TerminatingOrFailed),
+									Template:             validPodTemplateSpec,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: errors.Join(fmt.Errorf("replicatedJob job-1: podReplacementPolicy must be set to Failed when in-place restart is enabled")),
+		},
+		{
+			name:                 "InPlaceRestart enabled: completions != parallelism",
+			enableInPlaceRestart: true,
+			js: &jobset.JobSet{
+				ObjectMeta: validObjectMeta,
+				Spec: jobset.JobSetSpec{
+					SuccessPolicy: &jobset.SuccessPolicy{},
+					FailurePolicy: &jobset.FailurePolicy{
+						RestartStrategy: jobset.InPlaceRestart,
+					},
+					ReplicatedJobs: []jobset.ReplicatedJob{
+						{
+							Name:      "job-1",
+							GroupName: "default",
+							Replicas:  1,
+							Template: batchv1.JobTemplateSpec{
+								Spec: batchv1.JobSpec{
+									Parallelism:          ptr.To[int32](1),
+									Completions:          ptr.To[int32](2),
+									BackoffLimit:         ptr.To[int32](math.MaxInt32),
+									PodReplacementPolicy: ptr.To(batchv1.Failed),
+									Template:             validPodTemplateSpec,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: errors.Join(fmt.Errorf("replicatedJob job-1: completions and parallelism must be set and equal to each other when in-place restart is enabled")),
+		},
+		{
+			name:                 "InPlaceRestart enabled: completions is nil",
+			enableInPlaceRestart: true,
+			js: &jobset.JobSet{
+				ObjectMeta: validObjectMeta,
+				Spec: jobset.JobSetSpec{
+					SuccessPolicy: &jobset.SuccessPolicy{},
+					FailurePolicy: &jobset.FailurePolicy{
+						RestartStrategy: jobset.InPlaceRestart,
+					},
+					ReplicatedJobs: []jobset.ReplicatedJob{
+						{
+							Name:      "job-1",
+							GroupName: "default",
+							Replicas:  1,
+							Template: batchv1.JobTemplateSpec{
+								Spec: batchv1.JobSpec{
+									Parallelism:          ptr.To[int32](1),
+									BackoffLimit:         ptr.To[int32](math.MaxInt32),
+									PodReplacementPolicy: ptr.To(batchv1.Failed),
+									Template:             validPodTemplateSpec,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: errors.Join(fmt.Errorf("replicatedJob job-1: completions and parallelism must be set and equal to each other when in-place restart is enabled")),
+		},
+		{
+			name:                 "InPlaceRestart enabled: parallelism is nil",
+			enableInPlaceRestart: true,
+			js: &jobset.JobSet{
+				ObjectMeta: validObjectMeta,
+				Spec: jobset.JobSetSpec{
+					SuccessPolicy: &jobset.SuccessPolicy{},
+					FailurePolicy: &jobset.FailurePolicy{
+						RestartStrategy: jobset.InPlaceRestart,
+					},
+					ReplicatedJobs: []jobset.ReplicatedJob{
+						{
+							Name:      "job-1",
+							GroupName: "default",
+							Replicas:  1,
+							Template: batchv1.JobTemplateSpec{
+								Spec: batchv1.JobSpec{
+									Completions:          ptr.To[int32](1),
+									BackoffLimit:         ptr.To[int32](math.MaxInt32),
+									PodReplacementPolicy: ptr.To(batchv1.Failed),
+									Template:             validPodTemplateSpec,
+								},
+							},
+						},
+					},
+				},
+			},
+			want: errors.Join(fmt.Errorf("replicatedJob job-1: completions and parallelism must be set and equal to each other when in-place restart is enabled")),
 		},
 	}
 

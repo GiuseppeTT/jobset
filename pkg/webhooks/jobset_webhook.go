@@ -165,6 +165,7 @@ func (j *jobSetWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) 
 	var allErrs []error
 
 	// Validate InPlaceRestart feature gate.
+	// The API changes should be used only when the feature gate is enabled.
 	if !features.Enabled(features.InPlaceRestart) {
 		if js.Spec.FailurePolicy != nil && js.Spec.FailurePolicy.RestartStrategy == jobset.InPlaceRestart {
 			allErrs = append(allErrs, fmt.Errorf("InPlaceRestart restart strategy is not supported when InPlaceRestart feature gate is disabled"))
@@ -175,6 +176,12 @@ func (j *jobSetWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) 
 		if js.Status.CurrentInPlaceRestartAttempt != nil {
 			allErrs = append(allErrs, fmt.Errorf("CurrentInPlaceRestartAttempt cannot be set when InPlaceRestart feature gate is disabled"))
 		}
+	} 
+
+	// Validate InPlaceRestart.
+	// If the feature gate is enabled, make sure the API is used correctly.
+	if features.Enabled(features.InPlaceRestart) && js.Spec.FailurePolicy != nil && js.Spec.FailurePolicy.RestartStrategy == jobset.InPlaceRestart {
+		allErrs = append(allErrs, validateCreateInPlaceRestart(js)...)
 	}
 
 	// Validate that depends On can't be set for the first replicated job.
@@ -284,7 +291,30 @@ func (j *jobSetWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) 
 		allErrs = append(allErrs, validateCoordinator(js))
 		allErrs = append(allErrs, validateCoordinatorLabelValue(js))
 	}
+
 	return nil, errors.Join(allErrs...)
+}
+
+func validateCreateInPlaceRestart(js *jobset.JobSet) []error {
+	var allErrs []error
+	for _, rJob := range js.Spec.ReplicatedJobs {
+		// Validate that the backoff limit is set to max int32.
+		if rJob.Template.Spec.BackoffLimit == nil || *rJob.Template.Spec.BackoffLimit != math.MaxInt32 {
+			allErrs = append(allErrs, fmt.Errorf("replicatedJob %s: backoffLimit must be set to %d (MaxInt32) when in-place restart is enabled", rJob.Name, math.MaxInt32))
+		}
+
+		// Validate that the pod replacement policy is set to Failed.
+		if rJob.Template.Spec.PodReplacementPolicy == nil || *rJob.Template.Spec.PodReplacementPolicy != batchv1.Failed {
+			allErrs = append(allErrs, fmt.Errorf("replicatedJob %s: podReplacementPolicy must be set to Failed when in-place restart is enabled", rJob.Name))
+		}
+
+		// Validate that completions is equal to parallelism.
+		if rJob.Template.Spec.Completions == nil || rJob.Template.Spec.Parallelism == nil || *rJob.Template.Spec.Completions != *rJob.Template.Spec.Parallelism {
+			allErrs = append(allErrs, fmt.Errorf("replicatedJob %s: completions and parallelism must be set and equal to each other when in-place restart is enabled", rJob.Name))
+		}
+	}
+
+	return allErrs
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
