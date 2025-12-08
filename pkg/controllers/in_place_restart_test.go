@@ -14,15 +14,24 @@ limitations under the License.
 package controllers
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/go-logr/logr"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+	"sigs.k8s.io/jobset/pkg/constants"
 	testutils "sigs.k8s.io/jobset/pkg/util/testing"
 )
 
@@ -531,4 +540,280 @@ func TestUpdatePreviousInPlaceRestartAttempt(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetAssociatedPods(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	corev1.AddToScheme(scheme)
+	jobset.AddToScheme(scheme)
+
+	js := testutils.MakeJobSet("test-jobset", "default").Obj()
+
+	tests := []struct {
+		name string
+		pods []corev1.Pod
+		want []string
+	}{
+		{
+			name: "pods associated with jobset",
+			pods: []corev1.Pod{
+				testutils.MakePod("pod-1", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: js.Name}).Obj(),
+				testutils.MakePod("pod-2", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: js.Name}).Obj(),
+			},
+			want: []string{"pod-1", "pod-2"},
+		},
+		{
+			name: "some pods not associated with jobset",
+			pods: []corev1.Pod{
+				testutils.MakePod("pod-1", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: js.Name}).Obj(),
+				testutils.MakePod("pod-2", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: "other-jobset"}).Obj(),
+				testutils.MakePod("pod-3", "default").Obj(),
+			},
+			want: []string{"pod-1"},
+		},
+		{
+			name: "no pods",
+			pods: []corev1.Pod{},
+			want: []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithIndex(&corev1.Pod{}, constants.AssociatedJobSetKey, func(obj client.Object) []string {
+					pod := obj.(*corev1.Pod)
+					jobSetName, ok := pod.Labels[jobset.JobSetNameKey]
+					if !ok {
+						return nil
+					}
+					namespacedJobSetName := fmt.Sprintf("%s/%s", pod.Namespace, jobSetName)
+					return []string{namespacedJobSetName}
+				}).
+				WithLists(&corev1.PodList{Items: tc.pods}).
+				Build()
+
+			r := &JobSetReconciler{Client: fakeClient}
+			gotPods, err := r.getAssociatedPods(ctx, js)
+			if err != nil {
+				t.Errorf("getAssociatedPods() error = %v", err)
+				return
+			}
+
+			gotNames := []string{}
+			for _, pod := range gotPods.Items {
+				gotNames = append(gotNames, pod.Name)
+			}
+
+			if diff := cmp.Diff(tc.want, gotNames, cmpopts.SortSlices(func(a, b string) bool { return a < b })); diff != "" {
+				t.Errorf("getAssociatedPods() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestReconcileInPlaceRestart(t *testing.T) {
+	ctx := context.Background()
+	scheme := runtime.NewScheme()
+	corev1.AddToScheme(scheme)
+	jobset.AddToScheme(scheme)
+
+	tests := []struct {
+		name             string
+		js               *jobset.JobSet
+		pods             []corev1.Pod
+		wantStatus       jobset.JobSetStatus
+		wantShouldUpdate bool
+		wantFailed       bool
+	}{
+		{
+			name: "update current in-place restart attempt",
+			js: testutils.MakeJobSet("test-jobset", "default").
+				FailurePolicy(&jobset.FailurePolicy{
+					RestartStrategy: jobset.InPlaceRestart,
+					MaxRestarts:     10,
+				}).
+				ReplicatedJob(testutils.MakeReplicatedJob("rj").
+					Replicas(1).
+					Job(testutils.MakeJobTemplate("job", "default").
+						Parallelism(1).
+						Completions(1).Obj()).Obj()).
+				SetStatus(jobset.JobSetStatus{
+					CurrentInPlaceRestartAttempt: ptr.To[int32](0),
+				}).Obj(),
+			pods: []corev1.Pod{
+				testutils.MakePod("pod-1", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: "test-jobset"}).
+					Annotations(map[string]string{jobset.InPlaceRestartAttemptKey: "1"}).Obj(),
+			},
+			wantStatus: jobset.JobSetStatus{
+				CurrentInPlaceRestartAttempt: ptr.To[int32](1),
+			},
+			wantShouldUpdate: true,
+		},
+		{
+			name: "update previous in-place restart attempt",
+			js: testutils.MakeJobSet("test-jobset", "default").
+				FailurePolicy(&jobset.FailurePolicy{
+					RestartStrategy: jobset.InPlaceRestart,
+					MaxRestarts:     10,
+				}).
+				ReplicatedJob(testutils.MakeReplicatedJob("rj").
+					Replicas(2).
+					Job(testutils.MakeJobTemplate("job", "default").
+						Parallelism(1).
+						Completions(1).Obj()).Obj()).
+				SetStatus(jobset.JobSetStatus{
+					PreviousInPlaceRestartAttempt: ptr.To[int32](0),
+				}).Obj(),
+			pods: []corev1.Pod{
+				testutils.MakePod("pod-1", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: "test-jobset"}).
+					Annotations(map[string]string{jobset.InPlaceRestartAttemptKey: "2"}).Obj(),
+				testutils.MakePod("pod-2", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: "test-jobset"}).
+					Annotations(map[string]string{jobset.InPlaceRestartAttemptKey: "1"}).Obj(),
+			},
+			wantStatus: jobset.JobSetStatus{
+				PreviousInPlaceRestartAttempt: ptr.To[int32](1),
+			},
+			wantShouldUpdate: true,
+		},
+		{
+			name: "fail jobset if max restarts exceeded",
+			js: testutils.MakeJobSet("test-jobset", "default").
+				FailurePolicy(&jobset.FailurePolicy{
+					RestartStrategy: jobset.InPlaceRestart,
+					MaxRestarts:     1,
+				}).
+				ReplicatedJob(testutils.MakeReplicatedJob("rj").
+					Replicas(1).
+					Job(testutils.MakeJobTemplate("job", "default").
+						Parallelism(1).
+						Completions(1).Obj()).Obj()).
+				SetStatus(jobset.JobSetStatus{
+					Restarts:                0,
+					RestartsCountTowardsMax: 0,
+				}).Obj(),
+			pods: []corev1.Pod{
+				testutils.MakePod("pod-1", "default").
+					Labels(map[string]string{jobset.JobSetNameKey: "test-jobset"}).
+					Annotations(map[string]string{jobset.InPlaceRestartAttemptKey: "2"}).Obj(),
+			},
+			wantStatus: jobset.JobSetStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:    string(jobset.JobSetFailed),
+						Status:  metav1.ConditionTrue,
+						Reason:  constants.ReachedMaxRestartsReason,
+						Message: constants.ReachedMaxRestartsMessage,
+					},
+				},
+			},
+			wantShouldUpdate: true,
+			wantFailed:       true,
+		},
+		{
+			name: "fail jobset if container restart count exceeded max restarts",
+			js: testutils.MakeJobSet("test-jobset", "default").
+				FailurePolicy(&jobset.FailurePolicy{
+					RestartStrategy: jobset.InPlaceRestart,
+					MaxRestarts:     1,
+				}).
+				ReplicatedJob(testutils.MakeReplicatedJob("rj").
+					Replicas(1).
+					Job(testutils.MakeJobTemplate("job", "default").
+						Parallelism(1).
+						Completions(1).Obj()).Obj()).
+				SetStatus(jobset.JobSetStatus{
+					Restarts:                0,
+					RestartsCountTowardsMax: 0,
+				}).Obj(),
+			pods: []corev1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "pod-1",
+						Namespace: "default",
+						Labels:    map[string]string{jobset.JobSetNameKey: "test-jobset"},
+					},
+					Status: corev1.PodStatus{
+						ContainerStatuses: []corev1.ContainerStatus{
+							{RestartCount: 2},
+						},
+					},
+				},
+			},
+			wantStatus: jobset.JobSetStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:    string(jobset.JobSetFailed),
+						Status:  metav1.ConditionTrue,
+						Reason:  constants.ReachedMaxRestartsReason,
+						Message: constants.ReachedMaxRestartsMessage,
+					},
+				},
+			},
+			wantShouldUpdate: true,
+			wantFailed:       true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithIndex(&corev1.Pod{}, constants.AssociatedJobSetKey, func(obj client.Object) []string {
+					pod := obj.(*corev1.Pod)
+					jobSetName, ok := pod.Labels[jobset.JobSetNameKey]
+					if !ok {
+						return nil
+					}
+					namespacedJobSetName := fmt.Sprintf("%s/%s", pod.Namespace, jobSetName)
+					return []string{namespacedJobSetName}
+				}).
+				WithLists(&corev1.PodList{Items: tc.pods}).
+				Build()
+
+			r := &JobSetReconciler{Client: fakeClient}
+			updateStatusOpts := &statusUpdateOpts{}
+			
+			// Use a logger that doesn't print to stdout
+			ctx = ctrl.LoggerInto(ctx, logr.Discard())
+
+			err := r.reconcileInPlaceRestart(ctx, tc.js, updateStatusOpts)
+			if err != nil {
+				t.Errorf("reconcileInPlaceRestart() error = %v", err)
+				return
+			}
+
+			if updateStatusOpts.shouldUpdate != tc.wantShouldUpdate {
+				t.Errorf("reconcileInPlaceRestart() updated = %v, want %v", updateStatusOpts.shouldUpdate, tc.wantShouldUpdate)
+			}
+
+			if tc.wantFailed {
+				if !checkCondition(tc.js.Status.Conditions, jobset.JobSetFailed, metav1.ConditionTrue) {
+					t.Errorf("reconcileInPlaceRestart() expected JobSetFailed condition")
+				}
+			} else {
+				if diff := cmp.Diff(tc.wantStatus, tc.js.Status, cmpopts.IgnoreFields(jobset.JobSetStatus{}, "Conditions")); diff != "" {
+					t.Errorf("reconcileInPlaceRestart() status mismatch (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
+}
+
+func checkCondition(conditions []metav1.Condition, t jobset.JobSetConditionType, status metav1.ConditionStatus) bool {
+	for _, c := range conditions {
+		if c.Type == string(t) && c.Status == status {
+			return true
+		}
+	}
+	return false
 }
