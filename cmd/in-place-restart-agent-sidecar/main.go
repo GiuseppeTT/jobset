@@ -61,7 +61,18 @@ func main() {
 	})))
 	env := parseEnvOrDie()
 
-	// Create manager
+	// Create controller manager
+	mgr := createManagerOrDie(env)
+
+	// Setup the in-place restart agent controller
+	setupInPlaceRestartAgentOrDie(mgr, env)
+
+	// Start
+	start(mgr)
+}
+
+// createManagerOrDie creates a controller manager or exits with an error
+func createManagerOrDie(env env) ctrl.Manager {
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
 		// Disable metrics
@@ -90,7 +101,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create in-place restart agent and register it with the manager
+	return mgr
+}
+
+// setupInPlaceRestartAgentOrDie sets up the in-place restart agent controller with the manager or exits with an error
+func setupInPlaceRestartAgentOrDie(mgr ctrl.Manager, env env) {
 	inPlaceRestartAgent := NewInPlaceRestartAgent(
 		mgr.GetClient(),
 		env.Namespace,
@@ -98,13 +113,17 @@ func main() {
 		env.WorkerCommand,
 		env.InPlaceRestartExitCode,
 	)
-	if err = inPlaceRestartAgent.SetupWithManager(mgr); err != nil {
+	if err := inPlaceRestartAgent.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", ControllerName)
 		os.Exit(1)
 	}
+}
 
+// start starts the controller manager and waits for it to stop
+// It also handles signals to exit with an appropriate exit code like 128 + signal number instead of 0
+func start(mgr ctrl.Manager) {
 	// Create a context that is cancelled when a signal is received
-	// This is done to make the agent exit with an appropriate exit code like 128 + signal number instead of 0
+	// This is done to make the program exit with an appropriate exit code like 128 + signal number instead of 0
 	ctx, cancel := context.WithCancel(context.Background())
 	signalChannel := make(chan os.Signal, 1)
 	signal.Notify(signalChannel, syscall.SIGINT, syscall.SIGTERM)
@@ -177,7 +196,7 @@ func getEnvOrDie(name string) string {
 	return value
 }
 
-// InPlaceRestartAgent is the controller that handles the in-place restart logic at the pod level
+// InPlaceRestartAgent is the controller that handles the in-place restart logic at the Pod level
 type InPlaceRestartAgent struct {
 	client.Client
 	Namespace                string
@@ -241,18 +260,18 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 	ctx = ctrl.LoggerInto(ctx, log)
 
 	// Handle start up
-	// The pod in-place restart attempt is set only once per agent execution, instead of possibly setting it multiple times in different reconciliations
-	// This could technically be done in the main function by getting the parent JobSet and patching the pod, but it is done in the reconcile function to reuse the manager client and its watch
+	// The Pod in-place restart attempt is set only once per agent execution, instead of possibly setting it multiple times in different reconciliations
+	// This could technically be done in the main function by getting the parent JobSet and patching the Pod, but it is done in the reconcile function to reuse the manager client and its watch
 	// This is done to decrease the impact on the API server as much as possible
-	// The startup is indicated by the pod in-place restart attempt being not being set yet
+	// The startup is indicated by the Pod in-place restart attempt being not being set yet
 	if r.PodInPlaceRestartAttempt == nil {
 		// If the jobset current in-place restart attempt has not been set yet, it means that the workload is starting for the first time
-		// So set the pod in-place restart attempt to 0
+		// So set the Pod in-place restart attempt to 0
 		var newPodInPlaceRestartAttempt int32
 		if currentInPlaceRestartAttempt == nil {
 			newPodInPlaceRestartAttempt = 0
 		// Otherwise, it means that the workload is restarting
-		// So set the pod in-place restart attempt to the jobset current in-place restart attempt + 1
+		// So set the Pod in-place restart attempt to the jobset current in-place restart attempt + 1
 		// This will make the agent keep waiting at the barrier until the jobset controller lifts it (i.e., update the jobset current in-place restart attempt)
 		} else {
 			newPodInPlaceRestartAttempt = *currentInPlaceRestartAttempt + 1
@@ -262,11 +281,11 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Handle in-place restart
-	// If the pod in-place restart attempt is less than or equal to the previous in-place restart attempt, it means that the jobset controller has marked the pod in-place restart attempt as outdated
-	// Which means that the pod should be restarted to reach the new in-place restart attempt
+	// If the Pod in-place restart attempt is less than or equal to the previous in-place restart attempt, it means that the jobset controller has marked the Pod in-place restart attempt as outdated
+	// Which means that the Pod should be restarted to reach the new in-place restart attempt
 	// So exit with the in-place restart exit code
-	// This will trigger container restart if pod.spec.restartPolicy = OnFailure
-	// Once RestartAllContainers is released upstream, this will trigger in-place container restart if pod.spec.initContainers[].restartPolicyRules[].action = RestartAllContainers
+	// This will trigger container restart if Pod.spec.restartPolicy = OnFailure
+	// Once RestartAllContainers is released upstream, this will trigger in-place container restart if Pod.spec.initContainers[].restartPolicyRules[].action = RestartAllContainers
 	if r.PodInPlaceRestartAttempt != nil && previousInPlaceRestartAttempt != nil && *r.PodInPlaceRestartAttempt <= *previousInPlaceRestartAttempt {
 		log.Info("exiting to in-place restart this Pod")
 		r.Exit(r.InPlaceRestartExitCode)
@@ -274,7 +293,7 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Handle barrier lift
-	// If the barrier is active and the pod in-place restart attempt is equal to the jobset current in-place restart attempt, it means that the jobset controller has marked the pod in-place restart attempt as synced with the other pods
+	// If the barrier is active and the Pod in-place restart attempt is equal to the jobset current in-place restart attempt, it means that the jobset controller has marked the Pod in-place restart attempt as synced with the other pods
 	// So execute the worker command
 	// TODO(k8s 1.35): Once RestartAllContainers is released upstream, this should succeed a start up probe instead
 	if r.IsBarrierActive && r.PodInPlaceRestartAttempt != nil && currentInPlaceRestartAttempt != nil && *r.PodInPlaceRestartAttempt == *currentInPlaceRestartAttempt {
@@ -286,22 +305,22 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-// patchPodInPlaceRestartAttempt updates the pod in-place restart attempt annotation by server-side apply
-// It also updates the in-memory pod in-place restart attempt
+// patchPodInPlaceRestartAttempt updates the Pod in-place restart attempt annotation by server-side apply
+// It also updates the in-memory Pod in-place restart attempt
 func (r *InPlaceRestartAgent) patchPodInPlaceRestartAttempt(ctx context.Context, newPodInPlaceRestartAttempt int32) error {
 	log := ctrl.LoggerFrom(ctx)
-	// Update the pod in-place restart attempt annotation by server-side apply
+	// Update the Pod in-place restart attempt annotation by server-side apply
 	podApplyConfig := corev1apply.Pod(r.PodName, r.Namespace).
 		WithAnnotations(map[string]string{
 			jobset.InPlaceRestartAttemptKey: strconv.Itoa(int(newPodInPlaceRestartAttempt)),
 		})
 	if err := r.Apply(ctx, podApplyConfig, client.FieldOwner(ControllerName), client.ForceOwnership); err != nil {
-		log.Error(err, "unable to patch pod annotation", "newPodInPlaceRestartAttempt", newPodInPlaceRestartAttempt)
+		log.Error(err, "unable to patch Pod annotation", "newPodInPlaceRestartAttempt", newPodInPlaceRestartAttempt)
 		return err
 	}
-	// If apply succeeds, update the in-memory pod in-place restart attempt
+	// If apply succeeds, update the in-memory Pod in-place restart attempt
 	r.PodInPlaceRestartAttempt = &newPodInPlaceRestartAttempt
-	log.Info("successfully updated pod in-place restart attempt annotation", "newPodInPlaceRestartAttempt", newPodInPlaceRestartAttempt)
+	log.Info("successfully updated Pod in-place restart attempt annotation", "newPodInPlaceRestartAttempt", newPodInPlaceRestartAttempt)
 	return nil
 }
 
