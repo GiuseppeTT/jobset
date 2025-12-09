@@ -177,6 +177,7 @@ func parseEnvOrDie() env {
 		os.Exit(1)
 	}
 	workerCommand := getEnvOrDie(EnvWorkerCommand)
+	
 	return env{
 		Namespace:              namespace,
 		JobSetName:             jobSetName,
@@ -193,6 +194,7 @@ func getEnvOrDie(name string) string {
 		setupLog.Error(nil, "env var must be set", "name", name, "value", value)
 		os.Exit(1)
 	}
+
 	return value
 }
 
@@ -309,6 +311,7 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 // It also updates the in-memory Pod in-place restart attempt
 func (r *InPlaceRestartAgent) patchPodInPlaceRestartAttempt(ctx context.Context, newPodInPlaceRestartAttempt int32) error {
 	log := ctrl.LoggerFrom(ctx)
+
 	// Update the Pod in-place restart attempt annotation with server-side apply
 	podApplyConfig := corev1apply.Pod(r.PodName, r.Namespace).
 		WithAnnotations(map[string]string{
@@ -318,9 +321,11 @@ func (r *InPlaceRestartAgent) patchPodInPlaceRestartAttempt(ctx context.Context,
 		log.Error(err, "unable to patch Pod annotation", "newPodInPlaceRestartAttempt", newPodInPlaceRestartAttempt)
 		return err
 	}
+
 	// If apply succeeds, update the in-memory Pod in-place restart attempt
 	r.PodInPlaceRestartAttempt = &newPodInPlaceRestartAttempt
 	log.Info("successfully updated Pod in-place restart attempt annotation", "newPodInPlaceRestartAttempt", newPodInPlaceRestartAttempt)
+
 	return nil
 }
 
@@ -339,6 +344,7 @@ func (r *InPlaceRestartAgent) executeWorkerCommand(ctx context.Context) {
 		r.Exit(1)
 		return
 	}
+
 	log.Info("worker command finished successfully")
 	r.Exit(0)
 }
