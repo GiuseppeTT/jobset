@@ -77,7 +77,7 @@ func (r *JobSetReconciler) reconcileInPlaceRestart(ctx context.Context, js *jobs
 	}
 
 	// If all associated Pods are at the same in-place restart attempt, set the current in-place restart attempt to the common value
-	// This will make the agent sidecars lift their barriers to allow the worker container to start running
+	// This will make the agents lift their barriers to allow the worker container to start running
 	// This is idempotent
 	if len(podInPlaceRestartAttempts) == expectedPodInPlaceRestartAttemptsLength && allEqual(podInPlaceRestartAttempts) {
 		updateCurrentInPlaceRestartAttempt(log, js, podInPlaceRestartAttempts, updateStatusOpts)
@@ -134,7 +134,7 @@ func getPodInPlaceRestartAttempts(associatedPods *corev1.PodList) ([]int32, erro
 		rawPodInPlaceRestartAttempt, ok := pod.Annotations[jobset.InPlaceRestartAttemptKey]
 		// Skip it if the annotation is missing
 		// The missing annotation might be an error
-		// But it is likely due to the time between the Pod being created and the agent sidecar creating the annotation
+		// But it is likely due to the time between the Pod being created and the agent creating the annotation
 		if !ok {
 			continue
 		}

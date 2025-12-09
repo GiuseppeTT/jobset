@@ -490,14 +490,14 @@ func schema_jobset_api_jobset_v1alpha2_JobSetStatus(ref common.ReferenceCallback
 					},
 					"previousInPlaceRestartAttempt": {
 						SchemaProps: spec.SchemaProps{
-							Description: "previousInPlaceRestartAttempt tracks the previous in-place restart attempt of the JobSet. It is read by the agent sidecar. If the in-place restart attempt of the Pod is smaller than or equal to previousInPlaceRestartAttempt, the agent sidecar should restart its Pod in-place.",
+							Description: "previousInPlaceRestartAttempt tracks the previous in-place restart attempt of the JobSet. It is read by the agent. If the in-place restart attempt of the Pod is smaller than or equal to previousInPlaceRestartAttempt, the agent should restart its Pod in-place.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
 					},
 					"currentInPlaceRestartAttempt": {
 						SchemaProps: spec.SchemaProps{
-							Description: "currentInPlaceRestartAttempt tracks the current in-place restart attempt of the JobSet. It is read by the agent sidecar. If the in-place restart attempt of the Pod is equal to currentInPlaceRestartAttempt, the agent sidecar should lift its barrier to allow the worker container to start running.",
+							Description: "currentInPlaceRestartAttempt tracks the current in-place restart attempt of the JobSet. It is read by the agent. If the in-place restart attempt of the Pod is equal to currentInPlaceRestartAttempt, the agent should lift its barrier to allow the worker container to start running.",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
