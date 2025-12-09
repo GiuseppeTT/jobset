@@ -18,7 +18,7 @@ RUN go mod download
 COPY . .
 
 # Build
-RUN CGO_ENABLED=${CGO_ENABLED} GOOS=linux GOARCH=${TARGETARCH} go build -a -o bin/in-place-restart-agent-sidecar cmd/in-place-restart-agent-sidecar/main.go
+RUN CGO_ENABLED=${CGO_ENABLED} GOOS=linux GOARCH=${TARGETARCH} go build -a -o bin/in-place-restart-agent cmd/in-place-restart-agent/main.go
 
 # Final image
 FROM --platform=${BUILDPLATFORM} ${BASE_IMAGE} AS final
@@ -29,10 +29,10 @@ WORKDIR /
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 # Copy the binary
-COPY --from=builder /workspace/bin/in-place-restart-agent-sidecar .
+COPY --from=builder /workspace/bin/in-place-restart-agent .
 
 # Set the user
 USER 65532:65532
 
 # Set the entrypoint
-ENTRYPOINT ["/in-place-restart-agent-sidecar"]
+ENTRYPOINT ["/in-place-restart-agent"]
