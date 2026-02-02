@@ -20,7 +20,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,8 +43,7 @@ func NewPodWebhook(client client.Client) *podWebhook {
 
 // SetupWebhookWithManager configures the mutating webhook for pods.
 func (p *podWebhook) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&corev1.Pod{}).
+	return ctrl.NewWebhookManagedBy(mgr, &corev1.Pod{}).
 		WithDefaulter(p).
 		WithValidator(p).
 		Complete()
@@ -58,11 +56,7 @@ func (p *podWebhook) InjectDecoder(d *admission.Decoder) error {
 }
 
 // Default mutates pods that are part of a JobSet
-func (p *podWebhook) Default(ctx context.Context, obj runtime.Object) error {
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
-		return nil
-	}
+func (p *podWebhook) Default(ctx context.Context, pod *corev1.Pod) error {
 	// If this pod is not part of a JobSet, skip it.
 	if _, isJobSetPod := pod.Annotations[jobset.JobSetNameKey]; !isJobSetPod {
 		return nil
