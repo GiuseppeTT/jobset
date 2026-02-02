@@ -24,7 +24,7 @@ spec:
             terminationGracePeriodSeconds: 0
             containers:
             - name: in-place-restart-agent
-              # See examples/in-place-restart/Dockerfile-big-container
+              # See examples/in-place-restart/Dockerfile-main-container-mode
               image: <CHANGE ME>
               # In-place restart the Pod if the worker fails
               restartPolicy: Never

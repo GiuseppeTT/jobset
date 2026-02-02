@@ -208,12 +208,12 @@ image-build:
 image-push: PUSH=--push
 image-push: image-build
 
-# Build the in-place restart agent binary (sidecar mode)
+# Build the in-place restart agent binary (sidecar container mode)
 .PHONY: in-place-restart-agent-build
 in-place-restart-agent-build: install-go-deps
 	$(GO_BUILD_ENV) $(GO_CMD) build -ldflags="$(LD_FLAGS)" -o bin/in-place-restart-agent cmd/in-place-restart-agent/main.go
 
-# Build the in-place restart agent image (sidecar mode)
+# Build the in-place restart agent image (sidecar container mode)
 .PHONY: in-place-restart-agent-image-build
 in-place-restart-agent-image-build:
 	$(IMAGE_BUILD_CMD) \

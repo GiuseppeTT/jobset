@@ -41,7 +41,7 @@ func TestReconcile(t *testing.T) {
 
 	testCases := []struct {
 		name                          string
-		workerCommand                 string // Only used in the tests to determine if the agent is in sidecar mode or in big container mode
+		workerCommand                 string // Only used in the tests to determine if the agent is in sidecar container mode or in main container mode
 		currentInPlaceRestartAttempt  *int32
 		previousInPlaceRestartAttempt *int32
 		podInPlaceRestartAttempt      *int32
@@ -201,7 +201,7 @@ func TestReconcile(t *testing.T) {
 			wantWorkerExecuted:            true,
 		},
 		{
-			name:                          "Agent lifts its barrier and starts startup probe server in sidecar mode (because all agents are in sync)",
+			name:                          "Agent lifts its barrier and starts startup probe server in sidecar container mode (because all agents are in sync)",
 			workerCommand:                 "",
 			currentInPlaceRestartAttempt:  ptr.To[int32](0),
 			previousInPlaceRestartAttempt: nil,
@@ -214,7 +214,7 @@ func TestReconcile(t *testing.T) {
 			wantStartupProbeServerStarted: true,
 		},
 		{
-			name:                          "Agent bypasses barrier in sidecarmode because RestartStrategy is not InPlaceRestart",
+			name:                          "Agent bypasses barrier in sidecar container mode because RestartStrategy is not InPlaceRestart",
 			workerCommand:                 "",
 			currentInPlaceRestartAttempt:  nil,
 			previousInPlaceRestartAttempt: nil,

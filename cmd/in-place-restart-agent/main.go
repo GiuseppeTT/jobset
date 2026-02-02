@@ -220,7 +220,7 @@ func parseEnvOrDie() env {
 	}
 	workerCommand := os.Getenv(EnvWorkerCommand)
 	if workerCommand != "" {
-		setupLog.Info("env var WORKER_COMMAND is set. In-place restart agent will run in big container mode")
+		setupLog.Info("env var WORKER_COMMAND is set. In-place restart agent will run in main container mode")
 	} else {
 		setupLog.Info("env var WORKER_COMMAND is not set. In-place restart agent will run in sidecar container mode")
 	}
@@ -352,7 +352,7 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 	if r.shouldBypassBarrier(&js) {
 		if r.IsBarrierActive {
 			log.Info("Bypassing sync barrier: JobSet has in-place restart disabled or uses a different restart strategy.")
-			if r.isSidecarMode() {
+			if r.isSidecarContainerMode() {
 				go r.startStartupProbeServer(ctx)
 			} else {
 				go r.executeWorkerCommand(ctx)
@@ -388,8 +388,8 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 	// If the Pod in-place restart attempt is less than or equal to the previous in-place restart attempt, it means that the JobSet controller has marked the Pod in-place restart attempt as outdated
 	// Which means that the Pod should be restarted to reach the new in-place restart attempt
 	// So exit with the in-place restart exit code
-	// For the sidecar mode, this will trigger in-place container restart since Pod.spec.initContainers[].restartPolicyRules[].action is set to RestartAllContainers
-	// For the big container mode, this will trigger container restart since Pod.spec.containers[].restartPolicyRules[].action is set to Restart
+	// For the sidecar container mode, this will trigger in-place container restart since Pod.spec.initContainers[].restartPolicyRules[].action is set to RestartAllContainers
+	// For the main container mode, this will trigger container restart since Pod.spec.containers[].restartPolicyRules[].action is set to Restart
 	if r.PodInPlaceRestartAttempt != nil && previousInPlaceRestartAttempt != nil && *r.PodInPlaceRestartAttempt <= *previousInPlaceRestartAttempt {
 		log.Info("exiting agent with in-place restart exit code to restart this Pod in-place", "exitCode", r.InPlaceRestartExitCode)
 		r.Exit(r.InPlaceRestartExitCode)
@@ -397,9 +397,9 @@ func (r *InPlaceRestartAgent) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	// Handle barrier lift
 	// If the barrier is active and the Pod in-place restart attempt is equal to the JobSet current in-place restart attempt, it means that the JobSet controller has marked the Pod in-place restart attempt as synced with the other Pods
-	// So lift the barrier by starting the startup probe server (sidecar mode) or executing the worker command (big container mode)
+	// So lift the barrier by starting the startup probe server (sidecar container mode) or executing the worker command (main container mode)
 	if r.IsBarrierActive && r.PodInPlaceRestartAttempt != nil && currentInPlaceRestartAttempt != nil && *r.PodInPlaceRestartAttempt == *currentInPlaceRestartAttempt {
-		if r.isSidecarMode() {
+		if r.isSidecarContainerMode() {
 			go r.startStartupProbeServer(ctx)
 		} else {
 			go r.executeWorkerCommand(ctx)
@@ -466,8 +466,8 @@ func (r *InPlaceRestartAgent) shouldBypassBarrier(js *jobset.JobSet) bool {
 	return false
 }
 
-// isSidecarMode returns true if the agent is in sidecar mode
-func (r *InPlaceRestartAgent) isSidecarMode() bool {
+// isSidecarContainerMode returns true if the agent is in sidecar container mode
+func (r *InPlaceRestartAgent) isSidecarContainerMode() bool {
 	return r.WorkerCommand == ""
 }
 
