@@ -450,6 +450,81 @@ spec:
               values: [42]
 ```
 
+#### Story 6: RestartJob and RestartJobAndIgnoreMaxRestarts
+
+As a user, I am running a ML workload using JobSet. My workload is able to recover from failures by restarting only the worker processes in the affected Job. The traditional restart logic `RestartJobSet` is too wasteful because it restarts all worker processes. Therefore, JobSet should provide a way to restart by recreating only the failed Job.
+
+**Example 1: Restart only the failed Job**:
+
+```yaml
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: js
+spec:
+  failurePolicy:
+    maxRestarts: ...
+    rules:
+    # If any Job fails, restart the JobSet by recreating only the failed Job
+    # Count the restart towards `jobSet.spec.failurePolicy.maxRestarts`
+    - name: r
+      action: RestartJob
+  replicatedJobs:
+  - name: rj
+    replicas: ...
+    template:
+      spec:
+        parallelism: ...
+        completions: ...
+        backoffLimit: 0 # Job fails if any Pod fails
+        template:
+          ...
+```
+
+**Example 2: Restart only the failed Job for worker Jobs and restart all Jobs for leader Jobs**:
+
+```yaml
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: js
+spec:
+  failurePolicy:
+    maxRestarts: ...
+    rules:
+    # If any Job from replicatedJob `rj-leader` fails, restart the JobSet by recreating ALL Jobs
+    # Count the restart towards `jobSet.spec.failurePolicy.maxRestarts`
+    - name: r-leader
+      action: RestartJobSet
+      targetReplicatedJobs:
+      - rj-leader
+    # If any Job from replicatedJob `rj-worker` fails, restart the JobSet by recreating only the failed Job
+    # Count the restart towards `jobSet.spec.failurePolicy.maxRestarts`
+    - name: r-worker
+      action: RestartJob
+      targetReplicatedJobs:
+      - rj-worker
+  replicatedJobs:
+  - name: rj-leader
+    replicas: ...
+    template:
+      spec:
+        parallelism: ...
+        completions: ...
+        backoffLimit: 0 # Job fails if any Pod fails
+        template:
+          ...
+  - name: rj-worker
+    replicas: ...
+    template:
+      spec:
+        parallelism: ...
+        completions: ...
+        backoffLimit: 0 # Job fails if any Pod fails
+        template:
+          ...
+```
+
 ### Notes/Constraints/Caveats (Optional)
 
 <!--
@@ -478,7 +553,6 @@ Consider including folks who also work outside the SIG or subproject.
 ### Proposed Failure Policy API
 
 ```go
-
 // FailurePolicyAction defines the action the JobSet controller will take for
 // a given FailurePolicyRule.
 type FailurePolicyAction string
@@ -493,6 +567,13 @@ const (
 
   // Don't count the failure against maxRestarts.
   RestartJobSetAndIgnoreMaxRestarts FailurePolicyAction = "RestartJobSetAndIgnoreMaxRestarts"
+
+	// Restart only the failed Job if the number of restart attempts is less than MaxRestarts.
+	// Otherwise, fail the JobSet.
+	RestartJob FailurePolicyAction = "RestartJob"
+
+	// Same as RestartJob but do not count the failure against maxRestarts.
+	RestartJobAndIgnoreMaxRestarts FailurePolicyAction = "RestartJobAndIgnoreMaxRestarts"
 )
 
 // FailurePolicyRule defines a FailurePolicyAction to be executed if a child job
@@ -506,7 +587,7 @@ type FailurePolicyRule struct {
   // The name must match the regular expression "^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$".
   Name string `json:"name"`
   // The action to take if the rule is matched.
-  // +kubebuilder:validation:Enum:=FailJobSet;RestartJobSet;RestartJobSetAndIgnoreMaxRestarts
+  // +kubebuilder:validation:Enum:=FailJobSet;RestartJobSet;RestartJobSetAndIgnoreMaxRestarts;RestartJob;RestartJobAndIgnoreMaxRestarts
   Action FailurePolicyAction `json:"action"`
   // The requirement on the job failure reasons. The requirement is satisfied
   // if at least one reason matches the list. An empty list matches any job
@@ -541,6 +622,39 @@ type FailurePolicy struct {
   Rules []FailurePolicyRule `json:"rules,omitempty"`
 }
 
+
+// JobSetStatus holds the status of a JobSet
+type JobSetStatus struct {
+  // JobsStatus holds the status of Jobs
+  // +optional
+	// +listType=map
+	// +listMapKey=name
+	JobsStatus []JobStatus `json:"individualJobsStatus,omitempty"`
+}
+
+// JobStatus holds the status of a Job
+type JobStatus struct {
+	// Name of the Job
+	Name string `json:"name"`
+
+	// Restarts tracks the number of times the Job has restarted (i.e. recreated in case of RestartJob action)
+	// +optional
+	Restarts int32 `json:"restarts"`
+
+	// RestartsCountTowardsMax tracks the number of times the Job has restarted that counts towards the maximum allowed number of restarts
+	// +optional
+	RestartsCountTowardsMax int32 `json:"restartsCountTowardsMax"`
+}
+
+const (
+	// RestartsKey is an annotation and label key which defines the restart attempt number
+	// the JobSet is currently on.
+	RestartsKey = "jobset.sigs.k8s.io/restart-attempt"
+
+	// JobRestartsKey is an annotation and label key which defines the restart attempt number
+	// the Job is currently on.
+	JobRestartsKey = "jobset.sigs.k8s.io/job-restart-attempt"
+)
 ```
 
 ### Constraints
