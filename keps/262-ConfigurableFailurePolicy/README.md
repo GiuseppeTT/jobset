@@ -622,28 +622,31 @@ type FailurePolicy struct {
   Rules []FailurePolicyRule `json:"rules,omitempty"`
 }
 
-
-// JobSetStatus holds the status of a JobSet
+// JobSetStatus defines the observed state of JobSet
 type JobSetStatus struct {
-  // JobsStatus holds the status of Jobs
+  // jobsStatus holds the status of Jobs
   // +optional
   // +listType=map
   // +listMapKey=name
-  JobsStatus []JobStatus `json:"individualJobsStatus,omitempty"`
+  // +kubebuilder:validation:MaxItems=1024
+  JobsStatus []JobStatus `json:"jobsStatus,omitempty"`
 }
 
 // JobStatus holds the status of a Job
 type JobStatus struct {
-  // Name of the Job
-  Name string `json:"name"`
+  // name of the Job
+  // +required
+  // +kubebuilder:validation:MinLength=1
+  // +kubebuilder:validation:MaxLength=253
+  Name string `json:"name,omitempty"`
 
-  // Restarts tracks the number of times the Job has restarted (i.e. recreated in case of RestartJob action)
+  // restarts tracks the number of times the Job has restarted (i.e. recreated in case of RestartJob action)
   // +optional
-  Restarts int32 `json:"restarts"`
+  Restarts *int32 `json:"restarts,omitempty"`
 
-  // RestartsCountTowardsMax tracks the number of times the Job has restarted that counts towards the maximum allowed number of restarts
+  // restartsCountTowardsMax tracks the number of times the Job has restarted that counts towards the maximum allowed number of restarts
   // +optional
-  RestartsCountTowardsMax int32 `json:"restartsCountTowardsMax"`
+  RestartsCountTowardsMax *int32 `json:"restartsCountTowardsMax,omitempty"`
 }
 
 const (
