@@ -682,6 +682,57 @@ will add an annotation `jobset.sigs.k8s.io/restart` to mark Jobs which need to b
 the JobSet controller will delete any jobs with this annotation, allowing them to be recreated in as part of the normal
 reconciliation process, without ever incrementing `jobset.sigs.k8s.io/restart-attempt` annotation.
 
+#### Extension: RestartJob and RestartJobAndIgnoreMaxRestarts
+
+Current restart logic for `action: RestartJobSet`:
+
+- Reconciliation loop 1
+    - In `getChildJobs`, the JobSet controller detects failed Jobs (i.e., contain condition type `"Failed"`) and group them to `ownedJobs.failed`
+    - If `len(ownedJobs.failed) > 0`, `executeFailurePolicy` is executed and the right restart action is used (`restartJobSetActionApplier` from `RestartJobSet` in this example)
+    - In `restartJobSetActionApplier`, the JobSet controller fails the JobSet if it failed too much (i.e., `js.Status.RestartsCountTowardsMax >= js.Spec.FailurePolicy.MaxRestarts`). Otherwise, it bumps `js.Status.Restarts += 1` and `js.Status.RestartsCountTowardsMax += 1`
+- Reconciliation loop 2
+    - In `getChildJobs`, the JobSet controller detects outdated Jobs (i.e., `job.labels['jobset.sigs.k8s.io/restart-attempt'] < js.Status.Restarts`) and group them to `ownedJobs.previous`
+    - Later in the `reconcile` function, the Jobs in `ownedJobs.previous` are deleted
+- Reconciliation loop 3...N
+    - In `shouldCreateJob`, the JobSet controller blocks recreation for outdated Jobs that still exist. Jobs that do not exist are later created in `r.createJobs` with the updated label `job.labels['jobset.sigs.k8s.io/restart-attempt'] = js.Status.Restarts`
+
+Future restart logic for `action: RestartJobSet`:
+
+- Reconciliation loop 1
+    - In `getChildJobs`, the JobSet controller detects failed Jobs (i.e., contain condition type `"Failed"`) and group them to `ownedJobs.failed`
+    - If `len(ownedJobs.failed) > 0`, `executeFailurePolicy` is executed and the right restart action is used (`restartJobSetActionApplier` from `RestartJobSet` in this example)
+    - In `restartJobSetActionApplier`, the JobSet controller fails the JobSet if it failed too much (i.e., `js.Status.RestartsCountTowardsMax >= js.Spec.FailurePolicy.MaxRestarts` or `js.Status.JobStatus[jobName].RestartsCountTowardsMax >= js.Spec.FailurePolicy.MaxRestarts`). Otherwise, it bumps `js.Status.Restarts += 1` and `js.Status.RestartsCountTowardsMax += 1` and `js.Status.JobStatus[*].Restarts += 1` and `js.Status.JobStatus[*].RestartsCountTowardsMax += 1`
+- Reconciliation loop 2
+    - In `getChildJobs`, the JobSet controller detects outdated Jobs (i.e., `job.labels['jobset.sigs.k8s.io/restart-attempt'] < js.Status.Restarts` or `job.labels['jobset.sigs.k8s.io/job-restart-attempt'] < js.Status.JobStatus[jobName].Restarts`) and group them to `ownedJobs.previous`
+    - Later in the `reconcile` function, the Jobs in `ownedJobs.previous` are deleted
+- Reconciliation loop 3...N
+    - In `shouldCreateJob`, the JobSet controller blocks recreation for outdated Jobs that still exist. Jobs that do not exist are later created in `r.createJobs` with the updated labels `job.labels['jobset.sigs.k8s.io/restart-attempt'] = js.Status.Restarts` and `job.labels['jobset.sigs.k8s.io/job-restart-attempt'] = js.Status.JobStatus[jobName].Restarts`
+
+Future restart logic for `action: RestartJob`:
+
+- Reconciliation loop 1
+    - In `getChildJobs`, the JobSet controller detects failed Jobs (i.e., contain condition type `"Failed"`) and group them to `ownedJobs.failed`
+    - If `len(ownedJobs.failed) > 0`, `executeFailurePolicy` is executed and the right restart action is used (`restartJobActionApplier` from `RestartJob` in this example)
+    - In `restartJobActionApplier`, the JobSet controller fails the JobSet if it failed too much (i.e., `js.Status.RestartsCountTowardsMax >= js.Spec.FailurePolicy.MaxRestarts ` or `js.Status.JobStatus[jobName].RestartsCountTowardsMax >= js.Spec.FailurePolicy.MaxRestarts`). Otherwise, it bumps `js.Status.JobStatus[jobName].Restarts += 1` and `js.Status.JobStatus[jobName].RestartsCountTowardsMax += 1`
+- Reconciliation loop 2
+    - In `getChildJobs`, the JobSet controller detects outdated Jobs (i.e., `job.labels['jobset.sigs.k8s.io/restart-attempt'] < js.Status.Restarts` or `job.labels['jobset.sigs.k8s.io/job-restart-attempt'] < js.Status.JobStatus[jobName].Restarts`) and group them to `ownedJobs.previous`
+    - Later in the `reconcile` function, the Jobs in `ownedJobs.previous` are deleted
+- Reconciliation loop 3...N
+    - In `shouldCreateJob`, the JobSet controller blocks recreation for outdated Jobs that still exist. Jobs that do not exist are later created in `r.createJobs` with the updated labels `job.labels['jobset.sigs.k8s.io/restart-attempt'] = js.Status.Restarts` and `job.labels['jobset.sigs.k8s.io/job-restart-attempt'] = js.Status.JobStatus[jobName].Restarts`
+
+Observability:
+
+- `jobSet.status.restarts`, `jobSet.status.restartsCountTowardsMax` and `job.labels['jobset.sigs.k8s.io/restart-attempt']` track only recreate-all-jobs restarts
+- `jobSet.status.jobsStatus[].restarts`, `jobSet.status.jobsStatus[].restartsCountTowardsMax` and `job.labels['jobset.sigs.k8s.io/job-restart-attempt']` track recreate-single-job and recreate-all-jobs for a given job. If the user wants to know only the number of recreate-single-job, they can subtract the fields such as `job.labels['jobset.sigs.k8s.io/job-restart-attempt']` - `job.labels['jobset.sigs.k8s.io/restart-attempt']`
+
+Future changes:
+
+- Once we agree on how to implement multiple restart limits for the same JobSet, I believe that this KEP should be easy to adapt. This is because we are tracking the number of restarts for each Job. So, it should be easy to compare these values to the JobSet spec in any way to decide if the JobSet should be failed
+
+Relation to in-place restart:
+
+- When used with in-place restart, these changes allow the failed Job to be recreated while all the other Pods are restarted in-place. This is a desired behavior. For instance, when using `alpha.jobset.sigs.k8s.io/exclusive-topology: rack`, we want to recreate all Pods from a failed rack, while restarting the Pods from other racks in-place.
+
 ### Test Plan
 
 The testing plan will focus on integration tests. Specific test cases and scenarios are defined in the integration test
