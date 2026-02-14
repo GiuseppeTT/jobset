@@ -568,12 +568,12 @@ const (
   // Don't count the failure against maxRestarts.
   RestartJobSetAndIgnoreMaxRestarts FailurePolicyAction = "RestartJobSetAndIgnoreMaxRestarts"
 
-	// Restart only the failed Job if the number of restart attempts is less than MaxRestarts.
-	// Otherwise, fail the JobSet.
-	RestartJob FailurePolicyAction = "RestartJob"
+  // Restart only the failed Job if the number of restart attempts is less than MaxRestarts.
+  // Otherwise, fail the JobSet.
+  RestartJob FailurePolicyAction = "RestartJob"
 
-	// Same as RestartJob but do not count the failure against maxRestarts.
-	RestartJobAndIgnoreMaxRestarts FailurePolicyAction = "RestartJobAndIgnoreMaxRestarts"
+  // Same as RestartJob but do not count the failure against maxRestarts.
+  RestartJobAndIgnoreMaxRestarts FailurePolicyAction = "RestartJobAndIgnoreMaxRestarts"
 )
 
 // FailurePolicyRule defines a FailurePolicyAction to be executed if a child job
@@ -627,33 +627,33 @@ type FailurePolicy struct {
 type JobSetStatus struct {
   // JobsStatus holds the status of Jobs
   // +optional
-	// +listType=map
-	// +listMapKey=name
-	JobsStatus []JobStatus `json:"individualJobsStatus,omitempty"`
+  // +listType=map
+  // +listMapKey=name
+  JobsStatus []JobStatus `json:"individualJobsStatus,omitempty"`
 }
 
 // JobStatus holds the status of a Job
 type JobStatus struct {
-	// Name of the Job
-	Name string `json:"name"`
+  // Name of the Job
+  Name string `json:"name"`
 
-	// Restarts tracks the number of times the Job has restarted (i.e. recreated in case of RestartJob action)
-	// +optional
-	Restarts int32 `json:"restarts"`
+  // Restarts tracks the number of times the Job has restarted (i.e. recreated in case of RestartJob action)
+  // +optional
+  Restarts int32 `json:"restarts"`
 
-	// RestartsCountTowardsMax tracks the number of times the Job has restarted that counts towards the maximum allowed number of restarts
-	// +optional
-	RestartsCountTowardsMax int32 `json:"restartsCountTowardsMax"`
+  // RestartsCountTowardsMax tracks the number of times the Job has restarted that counts towards the maximum allowed number of restarts
+  // +optional
+  RestartsCountTowardsMax int32 `json:"restartsCountTowardsMax"`
 }
 
 const (
-	// RestartsKey is an annotation and label key which defines the restart attempt number
-	// the JobSet is currently on.
-	RestartsKey = "jobset.sigs.k8s.io/restart-attempt"
+  // RestartsKey is an annotation and label key which defines the restart attempt number
+  // the JobSet is currently on.
+  RestartsKey = "jobset.sigs.k8s.io/restart-attempt"
 
-	// JobRestartsKey is an annotation and label key which defines the restart attempt number
-	// the Job is currently on.
-	JobRestartsKey = "jobset.sigs.k8s.io/job-restart-attempt"
+  // JobRestartsKey is an annotation and label key which defines the restart attempt number
+  // the Job is currently on.
+  JobRestartsKey = "jobset.sigs.k8s.io/job-restart-attempt"
 )
 ```
 
