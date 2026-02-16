@@ -78,6 +78,7 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | controller.leaderElection.enable | bool | `true` | Whether to enable leader election for jobset controller. |
 | controller.clientConnection.qps | int | `500` | QPS is the number of queries per second allowed for K8S api server connection. |
 | controller.clientConnection.burst | int | `500` | Burst allows extra queries to accumulate when a client is exceeding its rate. |
+| controller.annotations | object | `{}` | Annotations to add to the jobset controller deployment. |
 | controller.env | list | `[]` | Environment variables of the jobset controller container. |
 | controller.envFrom | list | `[]` | Environment variable sources of the jobset controller container. |
 | controller.volumeMounts | list | `[]` | Volume mounts of the jobset controller container. |
@@ -87,6 +88,7 @@ See [helm uninstall](https://helm.sh/docs/helm/helm_uninstall) for command docum
 | controller.nodeSelector | object | `{}` | Node selector of the jobset controller pods. |
 | controller.affinity | object | `{}` | Affinity of the jobset controller pods. |
 | controller.tolerations | list | `[]` | Tolerations of the jobset controller pods. |
+| controller.podAnnotations | object | `{}` | Annotations to add to the jobset controller pods. |
 | controller.podSecurityContext | object | `{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}` | Security context of all jobset controller containers. |
 | controller.hostNetwork | bool | `false` | Run the controller/webhook Pods on the node's network namespace instead of the overlay CNI. |
 | controller.podDisruptionBudget.enabled | bool | `false` | Enable PodDisruptionBudget for the controller. |
