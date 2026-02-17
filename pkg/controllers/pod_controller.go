@@ -140,9 +140,6 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, fmt.Errorf("job key label not found on leader pod: %q", leaderPod.Name)
 	}
 
-	// For security, only reconcile pods that have the same controller owner as the leader pod.
-	// This prevents an attacker with 'create pods' permission from injecting a pod with a
-	// forged job-key label into the JobSet.
 	owner := metav1.GetControllerOf(&leaderPod)
 	if owner == nil {
 		return ctrl.Result{}, fmt.Errorf("leader pod %q has no controller owner", leaderPod.Name)
@@ -169,9 +166,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 }
 
 // listPodsForJob returns a list of pods owned by a specific job, using the
-// jobKey (SHA1 hash of the namespaced job name) label selector.
-// For security, we filter the pods to only include those that have the same
-// controller owner UID as the leader pod.
+// jobKey (SHA1 hash of the namespaced job name) label selector and the owner UID
 func (r *PodReconciler) listPodsForJob(ctx context.Context, ns, jobKey string, ownerUID types.UID) (*corev1.PodList, error) {
 	log := ctrl.LoggerFrom(ctx)
 	var podList corev1.PodList

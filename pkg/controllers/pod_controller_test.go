@@ -426,15 +426,15 @@ func TestListPodsForJob(t *testing.T) {
 		},
 	}
 
-	maliciousPod := makePod(&makePodArgs{
+	inconsistentPod := makePod(&makePodArgs{
 		jobSetName:        jobSetName,
 		replicatedJobName: "replicated-job-1",
 		jobName:           jobName,
-		podName:           "malicious-pod",
+		podName:           "inconsistent-pod",
 		ns:                ns,
 		jobIdx:            0,
 	}).AddAnnotation(jobset.ExclusiveKey, "topologyKey").Obj()
-	maliciousPod.OwnerReferences = []metav1.OwnerReference{
+	inconsistentPod.OwnerReferences = []metav1.OwnerReference{
 		{
 			APIVersion: "batch/v1",
 			Kind:       "Job",
@@ -467,11 +467,11 @@ func TestListPodsForJob(t *testing.T) {
 			expectedCount: 2,
 		},
 		{
-			name: "with malicious and unowned pods",
+			name: "with inconsistent and unowned pods",
 			pods: []corev1.Pod{
 				leaderPod,
 				followerPod,
-				maliciousPod,
+				inconsistentPod,
 				unownedPod,
 			},
 			expectedCount: 2,
