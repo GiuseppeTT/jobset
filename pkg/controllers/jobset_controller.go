@@ -457,7 +457,18 @@ func (r *JobSetReconciler) calculateReplicatedJobStatuses(ctx context.Context, j
 }
 
 func (r *JobSetReconciler) suspendJobs(ctx context.Context, js *jobset.JobSet, activeJobs []*batchv1.Job, updateStatusOpts *statusUpdateOpts) error {
+	// HACK: If the JobSet has the hack annotation, do not allow the Job object to be modified
+	if js.Annotations["jobset.sigs.k8s.io/hack"] == "true" {
+		setJobSetSuspendedCondition(js, updateStatusOpts)
+		return nil
+	}
+
 	for _, job := range activeJobs {
+		// HACK: If the Job has the hack annotation, do not allow the Job object to be modified
+		if job.Annotations["jobset.sigs.k8s.io/hack"] == "true" {
+			continue
+		}
+
 		if !jobSuspended(job) {
 			job.Spec.Suspend = ptr.To(true)
 			if err := r.Update(ctx, job); err != nil {
@@ -509,6 +520,11 @@ func (r *JobSetReconciler) resumeJobsIfNecessary(ctx context.Context, js *jobset
 
 		jobsFromRJob := replicatedJobToActiveJobs[replicatedJob.Name]
 		for _, job := range jobsFromRJob {
+			// HACK: If the JobSet or the Job has the hack annotation, do not allow the Job object to be modified in r.resumeJob
+			if js.Annotations["jobset.sigs.k8s.io/hack"] == "true" || job.Annotations["jobset.sigs.k8s.io/hack"] == "true" {
+				continue
+			}
+
 			if !jobSuspended(job) {
 				continue
 			}
