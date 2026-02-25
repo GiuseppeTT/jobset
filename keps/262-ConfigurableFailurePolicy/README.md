@@ -802,6 +802,11 @@ milestones with these graduation criteria:
 
 - Prototyped proposal January 12th, 2024
 - KEP published January 19th, 2024
+- Corrected typo in configurable failure policy KEP April 19th, 2024
+- Fixed CI error caused by typo April 21st, 2024
+- Proposed RecreateJob behavior July 11th, 2025
+- Reverted RecreateJob failure policy action addition August 24th, 2025
+- Distinguish retriable from non retriable Pod failure policies September 18th, 2025
 
 ## Drawbacks
 
