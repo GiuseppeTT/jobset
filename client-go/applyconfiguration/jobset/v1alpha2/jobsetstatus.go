@@ -21,11 +21,13 @@ import (
 // JobSetStatusApplyConfiguration represents a declarative configuration of the JobSetStatus type for use
 // with apply.
 type JobSetStatusApplyConfiguration struct {
-	Conditions              []v1.ConditionApplyConfiguration        `json:"conditions,omitempty"`
-	Restarts                *int32                                  `json:"restarts,omitempty"`
-	RestartsCountTowardsMax *int32                                  `json:"restartsCountTowardsMax,omitempty"`
-	TerminalState           *string                                 `json:"terminalState,omitempty"`
-	ReplicatedJobsStatus    []ReplicatedJobStatusApplyConfiguration `json:"replicatedJobsStatus,omitempty"`
+	Conditions                   []v1.ConditionApplyConfiguration        `json:"conditions,omitempty"`
+	Restarts                     *int32                                  `json:"restarts,omitempty"`
+	RestartsCountTowardsMax      *int32                                  `json:"restartsCountTowardsMax,omitempty"`
+	TotalRestarts                *int32                                  `json:"totalRestarts,omitempty"`
+	TotalRestartsCountTowardsMax *int32                                  `json:"totalRestartsCountTowardsMax,omitempty"`
+	TerminalState                *string                                 `json:"terminalState,omitempty"`
+	ReplicatedJobsStatus         []ReplicatedJobStatusApplyConfiguration `json:"replicatedJobsStatus,omitempty"`
 }
 
 // JobSetStatusApplyConfiguration constructs a declarative configuration of the JobSetStatus type for use with
@@ -60,6 +62,22 @@ func (b *JobSetStatusApplyConfiguration) WithRestarts(value int32) *JobSetStatus
 // If called multiple times, the RestartsCountTowardsMax field is set to the value of the last call.
 func (b *JobSetStatusApplyConfiguration) WithRestartsCountTowardsMax(value int32) *JobSetStatusApplyConfiguration {
 	b.RestartsCountTowardsMax = &value
+	return b
+}
+
+// WithTotalRestarts sets the TotalRestarts field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the TotalRestarts field is set to the value of the last call.
+func (b *JobSetStatusApplyConfiguration) WithTotalRestarts(value int32) *JobSetStatusApplyConfiguration {
+	b.TotalRestarts = &value
+	return b
+}
+
+// WithTotalRestartsCountTowardsMax sets the TotalRestartsCountTowardsMax field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the TotalRestartsCountTowardsMax field is set to the value of the last call.
+func (b *JobSetStatusApplyConfiguration) WithTotalRestartsCountTowardsMax(value int32) *JobSetStatusApplyConfiguration {
+	b.TotalRestartsCountTowardsMax = &value
 	return b
 }
 

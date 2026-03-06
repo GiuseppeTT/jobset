@@ -30,10 +30,12 @@ class JobsetV1alpha2JobSetStatus(BaseModel):
     """ # noqa: E501
     conditions: Optional[List[IoK8sApimachineryPkgApisMetaV1Condition]] = None
     replicated_jobs_status: Optional[List[JobsetV1alpha2ReplicatedJobStatus]] = Field(default=None, description="ReplicatedJobsStatus track the number of JobsReady for each replicatedJob.", alias="replicatedJobsStatus")
-    restarts: Optional[StrictInt] = Field(default=0, description="Restarts tracks the number of times the JobSet has restarted (i.e. recreated in case of RecreateAll policy).")
-    restarts_count_towards_max: Optional[StrictInt] = Field(default=None, description="RestartsCountTowardsMax tracks the number of times the JobSet has restarted that counts towards the maximum allowed number of restarts.", alias="restartsCountTowardsMax")
-    terminal_state: Optional[StrictStr] = Field(default=None, description="TerminalState the state of the JobSet when it finishes execution. It can be either Completed or Failed. Otherwise, it is empty by default.", alias="terminalState")
-    __properties: ClassVar[List[str]] = ["conditions", "replicatedJobsStatus", "restarts", "restartsCountTowardsMax", "terminalState"]
+    restarts: Optional[StrictInt] = Field(default=0, description="restarts tracks the number of times the JobSet has globally restarted (i.e. recreated all Jobs due to a restart action such as RestartJobSet).")
+    restarts_count_towards_max: Optional[StrictInt] = Field(default=None, description="restartsCountTowardsMax tracks the number of times the JobSet has globally restarted that counts towards the maximum allowed number of restarts (i.e. recreated all Jobs due to a restart action such as RestartJobSet).", alias="restartsCountTowardsMax")
+    terminal_state: Optional[StrictStr] = Field(default=None, description="terminalState tracks the state of the JobSet when it finishes execution. It can be either Completed or Failed. Otherwise, it is empty by default.", alias="terminalState")
+    total_restarts: Optional[StrictInt] = Field(default=None, description="totalRestarts tracks the number of times the JobSet has restarted in any way (e.g., this also counts restart actions such as RestartJob). Nil should be treated as `jobSet.status.restarts`", alias="totalRestarts")
+    total_restarts_count_towards_max: Optional[StrictInt] = Field(default=None, description="totalRestartsCountTowardsMax tracks the number of times the JobSet has restarted in any way that counts towards the maximum allowed number of restarts (e.g., this also counts restart actions such as RestartJob). Nil should be treated as `jobSet.status.restartsCountTowardsMax`", alias="totalRestartsCountTowardsMax")
+    __properties: ClassVar[List[str]] = ["conditions", "replicatedJobsStatus", "restarts", "restartsCountTowardsMax", "terminalState", "totalRestarts", "totalRestartsCountTowardsMax"]
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -104,7 +106,9 @@ class JobsetV1alpha2JobSetStatus(BaseModel):
             "replicatedJobsStatus": [JobsetV1alpha2ReplicatedJobStatus.from_dict(_item) for _item in obj["replicatedJobsStatus"]] if obj.get("replicatedJobsStatus") is not None else None,
             "restarts": obj.get("restarts") if obj.get("restarts") is not None else 0,
             "restartsCountTowardsMax": obj.get("restartsCountTowardsMax"),
-            "terminalState": obj.get("terminalState")
+            "terminalState": obj.get("terminalState"),
+            "totalRestarts": obj.get("totalRestarts"),
+            "totalRestartsCountTowardsMax": obj.get("totalRestartsCountTowardsMax")
         })
         return _obj
 

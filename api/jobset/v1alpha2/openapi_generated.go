@@ -165,7 +165,7 @@ func schema_jobset_api_jobset_v1alpha2_FailurePolicyRule(ref common.ReferenceCal
 					},
 					"action": {
 						SchemaProps: spec.SchemaProps{
-							Description: "The action to take if the rule is matched.",
+							Description: "action to take if the rule is matched.",
 							Default:     "",
 							Type:        []string{"string"},
 							Format:      "",
@@ -442,7 +442,7 @@ func schema_jobset_api_jobset_v1alpha2_JobSetStatus(ref common.ReferenceCallback
 					},
 					"restarts": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Restarts tracks the number of times the JobSet has restarted (i.e. recreated in case of RecreateAll policy).",
+							Description: "restarts tracks the number of times the JobSet has globally restarted (i.e. recreated all Jobs due to a restart action such as RestartJobSet).",
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
@@ -450,14 +450,28 @@ func schema_jobset_api_jobset_v1alpha2_JobSetStatus(ref common.ReferenceCallback
 					},
 					"restartsCountTowardsMax": {
 						SchemaProps: spec.SchemaProps{
-							Description: "RestartsCountTowardsMax tracks the number of times the JobSet has restarted that counts towards the maximum allowed number of restarts.",
+							Description: "restartsCountTowardsMax tracks the number of times the JobSet has globally restarted that counts towards the maximum allowed number of restarts (i.e. recreated all Jobs due to a restart action such as RestartJobSet).",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"totalRestarts": {
+						SchemaProps: spec.SchemaProps{
+							Description: "totalRestarts tracks the number of times the JobSet has restarted in any way (e.g., this also counts restart actions such as RestartJob). Nil should be treated as `jobSet.status.restarts`",
+							Type:        []string{"integer"},
+							Format:      "int32",
+						},
+					},
+					"totalRestartsCountTowardsMax": {
+						SchemaProps: spec.SchemaProps{
+							Description: "totalRestartsCountTowardsMax tracks the number of times the JobSet has restarted in any way that counts towards the maximum allowed number of restarts (e.g., this also counts restart actions such as RestartJob). Nil should be treated as `jobSet.status.restartsCountTowardsMax`",
 							Type:        []string{"integer"},
 							Format:      "int32",
 						},
 					},
 					"terminalState": {
 						SchemaProps: spec.SchemaProps{
-							Description: "TerminalState the state of the JobSet when it finishes execution. It can be either Completed or Failed. Otherwise, it is empty by default.",
+							Description: "terminalState tracks the state of the JobSet when it finishes execution. It can be either Completed or Failed. Otherwise, it is empty by default.",
 							Type:        []string{"string"},
 							Format:      "",
 						},
@@ -644,6 +658,20 @@ func schema_jobset_api_jobset_v1alpha2_ReplicatedJobStatus(ref common.ReferenceC
 							Default:     0,
 							Type:        []string{"integer"},
 							Format:      "int32",
+						},
+					},
+					"jobRestarts": {
+						SchemaProps: spec.SchemaProps{
+							Description: "jobRestarts tracks the number of times the Job has individually restarted for each job index. It is encoded as `<restarts of job 0>,...,<restarts of job replicas - 1>` Max length is set to 32KB (32768 bytes). This is enough to handle 2 978 replicas per replicatedJob",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"jobRestartsCountTowardsMax": {
+						SchemaProps: spec.SchemaProps{
+							Description: "jobRestartsCountTowardsMax tracks the number of times the Job has individually restarted that counts towards the maximum allowed number of restarts for each job index. It is encoded as `<restarts of job 0>,...,<restarts of job replicas - 1>` Max length is set to 32KB (32768 bytes). This is enough to handle 2 978 replicas per replicatedJob",
+							Type:        []string{"string"},
+							Format:      "",
 						},
 					},
 				},

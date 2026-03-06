@@ -17,12 +17,14 @@ package v1alpha2
 // ReplicatedJobStatusApplyConfiguration represents a declarative configuration of the ReplicatedJobStatus type for use
 // with apply.
 type ReplicatedJobStatusApplyConfiguration struct {
-	Name      *string `json:"name,omitempty"`
-	Ready     *int32  `json:"ready,omitempty"`
-	Succeeded *int32  `json:"succeeded,omitempty"`
-	Failed    *int32  `json:"failed,omitempty"`
-	Active    *int32  `json:"active,omitempty"`
-	Suspended *int32  `json:"suspended,omitempty"`
+	Name                       *string `json:"name,omitempty"`
+	Ready                      *int32  `json:"ready,omitempty"`
+	Succeeded                  *int32  `json:"succeeded,omitempty"`
+	Failed                     *int32  `json:"failed,omitempty"`
+	Active                     *int32  `json:"active,omitempty"`
+	Suspended                  *int32  `json:"suspended,omitempty"`
+	JobRestarts                *string `json:"jobRestarts,omitempty"`
+	JobRestartsCountTowardsMax *string `json:"jobRestartsCountTowardsMax,omitempty"`
 }
 
 // ReplicatedJobStatusApplyConfiguration constructs a declarative configuration of the ReplicatedJobStatus type for use with
@@ -76,5 +78,21 @@ func (b *ReplicatedJobStatusApplyConfiguration) WithActive(value int32) *Replica
 // If called multiple times, the Suspended field is set to the value of the last call.
 func (b *ReplicatedJobStatusApplyConfiguration) WithSuspended(value int32) *ReplicatedJobStatusApplyConfiguration {
 	b.Suspended = &value
+	return b
+}
+
+// WithJobRestarts sets the JobRestarts field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the JobRestarts field is set to the value of the last call.
+func (b *ReplicatedJobStatusApplyConfiguration) WithJobRestarts(value string) *ReplicatedJobStatusApplyConfiguration {
+	b.JobRestarts = &value
+	return b
+}
+
+// WithJobRestartsCountTowardsMax sets the JobRestartsCountTowardsMax field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the JobRestartsCountTowardsMax field is set to the value of the last call.
+func (b *ReplicatedJobStatusApplyConfiguration) WithJobRestartsCountTowardsMax(value string) *ReplicatedJobStatusApplyConfiguration {
+	b.JobRestartsCountTowardsMax = &value
 	return b
 }
