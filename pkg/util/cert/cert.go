@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	config "sigs.k8s.io/jobset/api/config/v1alpha1"
@@ -83,14 +84,23 @@ func buildCertRotatorConfig(cfg config.Configuration, namespace, controllerName 
 
 // BootstrapCerts creates a minimal manager to generate webhook certificates and
 // waits for them to be mounted before the main manager starts.
-func BootstrapCerts(ctx context.Context, kubeConfig *rest.Config, cfg config.Configuration) error {
+func BootstrapCerts(ctx context.Context, kubeConfig *rest.Config, cfg config.Configuration, healthProbeBindAddress string) error {
 	namespace := getOperatorNamespace()
 	bootstrapMgr, err := ctrl.NewManager(kubeConfig, ctrl.Options{
 		Metrics:                metricsserver.Options{BindAddress: "0"},
-		HealthProbeBindAddress: "0",
+		HealthProbeBindAddress: healthProbeBindAddress,
 	})
 	if err != nil {
 		return fmt.Errorf("create bootstrap manager: %w", err)
+	}
+
+	if healthProbeBindAddress != "0" {
+		if err := bootstrapMgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+			return fmt.Errorf("add bootstrap health check: %w", err)
+		}
+		if err := bootstrapMgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+			return fmt.Errorf("add bootstrap ready check: %w", err)
+		}
 	}
 
 	certsReady := make(chan struct{})

@@ -126,11 +126,13 @@ func main() {
 		metricsAddr = cfg.Metrics.BindAddress
 	}
 
+	var healthProbeBindAddress string
 	if flagsSet["health-probe-bind-address"] {
-		options.HealthProbeBindAddress = probeAddr
+		healthProbeBindAddress = probeAddr
 	} else {
-		options.HealthProbeBindAddress = cfg.Health.HealthProbeBindAddress
+		healthProbeBindAddress = cfg.Health.HealthProbeBindAddress
 	}
+	options.HealthProbeBindAddress = healthProbeBindAddress
 
 	if flagsSet["leader-elect"] {
 		options.LeaderElection = enableLeaderElection
@@ -189,7 +191,7 @@ func main() {
 
 	ctx := ctrl.SetupSignalHandler()
 	if cfg.InternalCertManagement != nil && *cfg.InternalCertManagement.Enable {
-		if err = cert.BootstrapCerts(ctx, kubeConfig, cfg); err != nil {
+		if err = cert.BootstrapCerts(ctx, kubeConfig, cfg, healthProbeBindAddress); err != nil {
 			setupLog.Error(err, "Unable to bootstrap cert rotation")
 			os.Exit(1)
 		}
